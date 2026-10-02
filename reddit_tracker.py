@@ -400,13 +400,19 @@ class Matcher:
     "rig" won't match "original" and "sale" won't match "resale", but digits
     may touch a term, so "rtx" still matches "RTX4060". Spaces in a term
     also match hyphens or nothing ("gaming pc" ~ "gaming-pc", "gamingpc").
+    Terms that start or end with punctuation ("?", "₹") match anywhere.
     """
 
     def __init__(self, terms: Iterable[str]):
-        parts = [re.escape(t.strip()).replace(r"\ ", r"[\s_-]*") for t in terms if t.strip()]
-        self.pattern = (
-            re.compile(r"(?<![a-z])(?:" + "|".join(parts) + r")(?![a-z])", re.I) if parts else None
-        )
+        parts = []
+        for term in (t.strip() for t in terms):
+            if not term:
+                continue
+            body = re.escape(term).replace(r"\ ", r"[\s_-]*")
+            before = r"(?<![a-z])" if term[0].isalpha() else ""
+            after = r"(?![a-z])" if term[-1].isalpha() else ""
+            parts.append(before + body + after)
+        self.pattern = re.compile("|".join(parts), re.I) if parts else None
 
     def __bool__(self) -> bool:
         return self.pattern is not None
@@ -514,6 +520,7 @@ class Tracker:
         store: SeenStore,
         keywords: Optional[list[str]] = None,
         highlights: Optional[dict[str, list[str]]] = None,
+        only_highlights: Optional[list[str]] = None,
         notify_on_start: bool = False,
         digest_threshold: int = 5,
     ):
@@ -529,6 +536,13 @@ class Tracker:
             )
             for label, terms in (highlights or {}).items()
         }
+        unknown = set(only_highlights or []) - set(self.highlights)
+        if unknown:
+            raise SystemExit(
+                f"ONLY_HIGHLIGHTS names {sorted(unknown)}, which aren't labels in HIGHLIGHTS "
+                f"({sorted(self.highlights) or 'none defined'})"
+            )
+        self.only_highlights = set(only_highlights or [])
         self.digest_threshold = digest_threshold
         # On the very first run, treat what's already there as seen so you
         # don't get blasted with the last 100 posts.
@@ -578,6 +592,9 @@ class Tracker:
                 continue
             first.also_in = sorted({p.subreddit for p in group} - {first.subreddit})
             first.tags = self.tags_for(first)
+            if self.only_highlights and not self.only_highlights & set(first.tags):
+                mark(group)  # ONLY_HIGHLIGHTS is set and this post has none of them
+                continue
             (highlighted if first.tags else regular).append(group)
 
         # Highlighted posts always get their own message; the rest are
@@ -606,12 +623,13 @@ class Tracker:
 
     def run(self, interval: float, stop: threading.Event) -> None:
         log.info(
-            "Watching r/%s every %.0fs (mode=%s, keyword filter=%s, highlights=%s)",
+            "Watching r/%s every %.0fs (mode=%s, keyword filter=%s, highlights=%s, only=%s)",
             "+".join(self.subreddits),
             interval,
             self.client.mode,
             "on" if self.keywords else "off",
             ", ".join(self.highlights) or "none",
+            ", ".join(sorted(self.only_highlights)) or "everything",
         )
         failures = 0
         while not stop.is_set():
@@ -762,6 +780,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         SeenStore(Path(os.getenv("STATE_FILE", "state.json"))),
         keywords=_split(os.getenv("KEYWORDS"), seps=","),  # phrases may contain spaces
         highlights=parse_highlights(os.getenv("HIGHLIGHTS")),
+        only_highlights=_split(os.getenv("ONLY_HIGHLIGHTS"), seps=","),
         notify_on_start=_env_bool("NOTIFY_ON_START"),
         digest_threshold=int(_env_number("DIGEST_THRESHOLD", 5)),
     )

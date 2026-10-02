@@ -337,3 +337,22 @@ def test_telegram_not_ok_raises():
     session = FakeSession([FakeResponse(400, json_data={"ok": False, "description": "chat not found"})])
     with pytest.raises(RuntimeError):
         rt.TelegramNotifier("TOKEN", "42", session=session).send("hi")
+
+
+def test_only_highlights_drops_everything_else(tmp_path):
+    batch = [post("pc", "WTS gaming pc", 1), post("phone", "Selling iPhone 15", 2), post("q", "Question", 3)]
+    tracker, notifier = fresh_tracker(tmp_path, [batch], highlights=HIGHLIGHTS, only_highlights=["Gaming PC"])
+    assert [p.id for p in tracker.poll_once()] == ["pc"]
+    assert len(notifier.sent) == 1
+    assert "phone" in tracker.store and "q" in tracker.store  # skipped for good, not retried
+
+
+def test_only_highlights_rejects_unknown_label(tmp_path):
+    with pytest.raises(SystemExit):
+        fresh_tracker(tmp_path, [], highlights=HIGHLIGHTS, only_highlights=["Gaming Laptop"])
+
+
+def test_punctuation_terms_match_next_to_letters():
+    m = rt.Matcher(["?", "₹"])
+    assert m.search("Is this worth it?") and m.search("Price₹500")
+    assert not rt.Matcher(["rig"]).search("original")
