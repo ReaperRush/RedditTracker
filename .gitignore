@@ -1,0 +1,7 @@
+.env
+state.json
+state.json.tmp
+data/
+__pycache__/
+.pytest_cache/
+.venv/
