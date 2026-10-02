@@ -101,20 +101,21 @@ last message to it**, so you need to text it every day. You also have to
 **re-join every 3 days**. Getting past both requires a registered WhatsApp
 sender and approved message templates.
 
-## 2. (Recommended) Reddit API credentials
+## 2. (Optional) Reddit API credentials
 
-The tracker works without credentials. It uses Reddit's public feed, which is
-limited to about one check per minute. With credentials it checks every 15
-seconds by default and is more reliable, especially on cloud servers, where
-Reddit often blocks anonymous requests.
+The tracker works without credentials. It uses Reddit's public RSS feed, which
+allows about one check per minute. With API credentials it checks every 15
+seconds by default.
 
-1. Go to https://www.reddit.com/prefs/apps → *create another app* → type **script**.
-   Use `http://localhost` as the redirect URI.
-2. Copy the client ID (the string under the app name) and the secret into
-   `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET`, and set `REDDIT_USERNAME`.
+Since November 2025, Reddit no longer creates API apps instantly. New access
+goes through a manual request under Reddit's Responsible Builder Policy:
+visiting https://www.reddit.com/prefs/apps leads to it. Replies take about 2–4
+weeks, and small personal projects are often turned down. If you're approved:
 
-If Reddit won't let you create an app, leave these empty. The RSS fallback
-needs no credentials.
+1. Put the client ID and secret in `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET`,
+   and set `REDDIT_USERNAME`.
+2. Restart the tracker. It switches to the API automatically and checks every
+   15 seconds (`POLL_INTERVAL_SECONDS`).
 
 ## 3. Run it
 
@@ -154,8 +155,9 @@ sudo nano /opt/reddit-tracker/.env && sudo systemctl restart reddit-tracker  # c
 ```
 
 If the logs say **"Reddit is blocking this server's IP address"**, add
-[Reddit API credentials](#2-recommended-reddit-api-credentials) to
-`/opt/reddit-tracker/.env` and restart the service.
+[Reddit API credentials](#2-optional-reddit-api-credentials) to
+`/opt/reddit-tracker/.env` and restart the service, or try a server from a
+different provider.
 
 ### With Docker
 
