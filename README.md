@@ -123,11 +123,39 @@ python reddit_tracker.py --dry-run --once # check Reddit works (prints instead o
 python reddit_tracker.py                  # run continuously
 ```
 
-For instant alerts, the tracker has to run all the time. Some options:
+For instant alerts, the tracker has to run all the time, on a machine that
+stays on.
 
-- **Your own always-on machine / Raspberry Pi / VPS:** use the included
-  `reddit-tracker.service` (systemd) so it starts on boot and restarts on failure.
-- **Docker:** `docker compose up -d` (add `--profile waha` if you use WAHA).
+### On a VPS (recommended)
+
+Any small Ubuntu or Debian server works: 1 CPU and 512 MB RAM is plenty.
+[Hetzner](https://www.hetzner.com/cloud)'s smallest plan costs about €4 a
+month; Vultr and DigitalOcean also work. Pick **Ubuntu 24.04**. The server
+location doesn't matter.
+
+Log in with SSH (`ssh root@<server-ip>`) and run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ReaperRush/RedditTracker/master/deploy/setup-vps.sh | sudo bash
+```
+
+The script asks for your Telegram bot token and chat ID, sends a test
+message, and installs the tracker as a service. The service starts on boot and
+restarts if it crashes. Run the same command again later to update. Useful
+commands:
+
+```bash
+journalctl -u reddit-tracker -f                                        # live logs
+sudo nano /opt/reddit-tracker/.env && sudo systemctl restart reddit-tracker  # change settings
+```
+
+If the logs say **"Reddit is blocking this server's IP address"**, add
+[Reddit API credentials](#2-recommended-reddit-api-credentials) to
+`/opt/reddit-tracker/.env` and restart the service.
+
+### With Docker
+
+`docker compose up -d` (add `--profile waha` if you use WAHA).
 
 Avoid scheduled CI jobs such as GitHub Actions cron. They run at most every
 5 minutes, often late, and Reddit blocks most of their IPs.

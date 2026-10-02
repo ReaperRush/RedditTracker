@@ -139,6 +139,11 @@ class RedditClient:
         resp = self._get(
             f"https://www.reddit.com/r/{multi}/new/.rss", params={"limit": limit}
         )
+        if resp.status_code == 403:
+            raise RuntimeError(
+                "Reddit is blocking this server's IP address. Create a Reddit app "
+                "and set REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET (see README)."
+            )
         resp.raise_for_status()
         return _parse_atom(resp.text)
 
