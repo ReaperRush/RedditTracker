@@ -385,3 +385,18 @@ def test_telegram_silent_flag():
     session = FakeSession([FakeResponse(200, json_data={"ok": True})])
     rt.TelegramNotifier("T", "1", session=session).send("hi", silent=True)
     assert session.calls[0][2]["json"]["disable_notification"] is True
+
+
+def test_priority_combination_requires_all_labels(tmp_path):
+    batch = [post("ask", "Is this gaming pc a fair deal", 1), post("sale", "Selling my gaming pc", 2)]
+    tracker, notifier = fresh_tracker(
+        tmp_path, [batch], highlights=HIGHLIGHTS, priority_highlights=["WTS+Gaming PC"]
+    )
+    tracker.poll_once()
+    assert notifier.sent[0].startswith("🚨 WTS · Gaming PC") and notifier.silent[0] is False
+    assert notifier.sent[1].startswith("🔥 Gaming PC") and notifier.silent[1] is True
+
+
+def test_combination_with_unknown_label_rejected(tmp_path):
+    with pytest.raises(SystemExit):
+        fresh_tracker(tmp_path, [], highlights=HIGHLIGHTS, priority_highlights=["WTS+Laptop"])

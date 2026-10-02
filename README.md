@@ -15,9 +15,10 @@ https://redd.it/1abcde
 - **Highlights:** posts matching your categories (e.g. WTS, Gaming PC) get a
   🔥 header and are always sent individually. Everything else still comes
   through as 🆕.
-- **Priority alerts:** choose which categories buzz your phone. For example,
-  with `PRIORITY_HIGHLIGHTS=Gaming PC`, gaming PCs arrive first with a 🚨 and a
-  sound, and every other post arrives silently in the same chat (Telegram).
+- **Priority alerts:** choose which categories buzz your phone. With
+  `PRIORITY_HIGHLIGHTS=WTS+Gaming PC` (the default), gaming PCs **for sale**
+  arrive first with a 🚨 and a sound. Every other post, including gaming-PC
+  questions and buy requests, arrives silently in the same chat (Telegram).
 - A listing cross-posted to several of your subs is sent once, naming all of them.
 - Optional keyword filter (title or body) if you only want matching posts.
 - Remembers what it already sent (`state.json`), so restarts don't cause duplicates.
@@ -170,8 +171,8 @@ Avoid scheduled CI jobs such as GitHub Actions cron. They run at most every
 | `SUBREDDITS` | (required) | Comma-separated subreddits |
 | `KEYWORDS` | (none) | Comma-separated; notify only when one appears in the title or body |
 | `HIGHLIGHTS` | (none) | `Label: term, term, -exclude; Label: …`, see below |
-| `PRIORITY_HIGHLIGHTS` | (none) | Labels that alert with sound (🚨); all other posts arrive silently (Telegram) |
-| `ONLY_HIGHLIGHTS` | (none) | Labels to keep; posts without one of them are dropped |
+| `PRIORITY_HIGHLIGHTS` | (none) | Labels that alert with sound (🚨); all other posts arrive silently (Telegram). `A+B` requires both |
+| `ONLY_HIGHLIGHTS` | (none) | Labels to keep; posts without one of them are dropped. `A+B` requires both |
 | `POLL_INTERVAL_SECONDS` | 15 (OAuth) / 60 | Seconds between checks |
 | `WHATSAPP_PROVIDER` | `callmebot` | `callmebot`, `waha`, `telegram`, `twilio` or `console` |
 | `DIGEST_THRESHOLD` | 5 | More new posts than this at once → one combined message |
@@ -192,10 +193,13 @@ group is checked against the post title and flair:
   `-budget` keep "Anyone selling a 3050 laptop? budget 40k" from being
   tagged WTS.
 
-The WTS rule in `.env.example` treats a price in the title (₹, Rs, INR) as a
-sale, because many r/IndiaUsedTech listings look like
-`[Phone] S24 | Mumbai | ₹45000` and never say "WTS". It was tuned against
-about 100 recent posts from those four subreddits.
+The WTS rule in `.env.example` treats a price in the title (₹, Rs, INR,
+"negotiable") and r/IndiaUsedTech's `[PC]` / `[PC/DESKTOP]` listing tags as a
+sale, and excludes buy requests and questions (`wtb`, `anyone selling`, `fair
+price`, `rate my`, `?`, …). Combined with the Gaming PC rule, it was checked
+against 695 recent posts from the five subreddits: 22 would buzz, and 21 of
+those were gaming PCs for sale. The other 619 posts, including ~50 gaming-PC
+questions and buy requests, arrived silently.
 
 ## Tests
 

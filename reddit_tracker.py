@@ -547,20 +547,29 @@ class Tracker:
             )
             for label, terms in (highlights or {}).items()
         }
-        for setting, labels in (("ONLY_HIGHLIGHTS", only_highlights), ("PRIORITY_HIGHLIGHTS", priority_highlights)):
-            unknown = set(labels or []) - set(self.highlights)
-            if unknown:
-                raise SystemExit(
-                    f"{setting} names {sorted(unknown)}, which aren't labels in HIGHLIGHTS "
-                    f"({sorted(self.highlights) or 'none defined'})"
-                )
-        self.only_highlights = set(only_highlights or [])
+        # Each entry is a label, or labels joined with "+" that must all match
+        # ("WTS+Gaming PC" = a gaming PC that's for sale).
+        self.only_highlights = self._label_sets("ONLY_HIGHLIGHTS", only_highlights)
         # When set, only these posts make a sound; everything else arrives silently.
-        self.priority_highlights = set(priority_highlights or [])
+        self.priority_highlights = self._label_sets("PRIORITY_HIGHLIGHTS", priority_highlights)
         self.digest_threshold = digest_threshold
         # On the very first run, treat what's already there as seen so you
         # don't get blasted with the last 100 posts.
         self._seeding = not store.existed and not notify_on_start
+
+    def _label_sets(self, setting: str, entries: Optional[list[str]]) -> list[frozenset[str]]:
+        sets = [frozenset(l.strip() for l in e.split("+") if l.strip()) for e in entries or []]
+        unknown = set().union(*sets) - set(self.highlights) if sets else set()
+        if unknown:
+            raise SystemExit(
+                f"{setting} names {sorted(unknown)}, which aren't labels in HIGHLIGHTS "
+                f"({sorted(self.highlights) or 'none defined'})"
+            )
+        return [s for s in sets if s]
+
+    @staticmethod
+    def _any_set_in(sets: list[frozenset[str]], tags: list[str]) -> bool:
+        return any(s <= set(tags) for s in sets)
 
     def matches(self, post: Post) -> bool:
         return not self.keywords or self.keywords.search(f"{post.title}\n{post.body}")
@@ -607,10 +616,10 @@ class Tracker:
                 continue
             first.also_in = sorted({p.subreddit for p in group} - {first.subreddit})
             first.tags = self.tags_for(first)
-            if self.only_highlights and not self.only_highlights & set(first.tags):
+            if self.only_highlights and not self._any_set_in(self.only_highlights, first.tags):
                 mark(group)  # ONLY_HIGHLIGHTS is set and this post has none of them
                 continue
-            if self.priority_highlights & set(first.tags):
+            if self._any_set_in(self.priority_highlights, first.tags):
                 priority.append(group)
             else:
                 (highlighted if first.tags else regular).append(group)
@@ -651,8 +660,8 @@ class Tracker:
             self.client.mode,
             "on" if self.keywords else "off",
             ", ".join(self.highlights) or "none",
-            ", ".join(sorted(self.only_highlights)) or "everything",
-            ", ".join(sorted(self.priority_highlights)) or "all",
+            ", ".join("+".join(sorted(x)) for x in self.only_highlights) or "everything",
+            ", ".join("+".join(sorted(x)) for x in self.priority_highlights) or "all",
         )
         failures = 0
         while not stop.is_set():
