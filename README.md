@@ -15,6 +15,9 @@ https://redd.it/1abcde
 - **Highlights:** posts matching your categories (e.g. WTS, Gaming PC) get a
   🔥 header and are always sent individually. Everything else still comes
   through as 🆕.
+- **Priority alerts:** choose which categories buzz your phone. For example,
+  with `PRIORITY_HIGHLIGHTS=Gaming PC`, gaming PCs arrive first with a 🚨 and a
+  sound, and every other post arrives silently in the same chat (Telegram).
 - A listing cross-posted to several of your subs is sent once, naming all of them.
 - Optional keyword filter (title or body) if you only want matching posts.
 - Remembers what it already sent (`state.json`), so restarts don't cause duplicates.
@@ -167,6 +170,8 @@ Avoid scheduled CI jobs such as GitHub Actions cron. They run at most every
 | `SUBREDDITS` | (required) | Comma-separated subreddits |
 | `KEYWORDS` | (none) | Comma-separated; notify only when one appears in the title or body |
 | `HIGHLIGHTS` | (none) | `Label: term, term, -exclude; Label: …`, see below |
+| `PRIORITY_HIGHLIGHTS` | (none) | Labels that alert with sound (🚨); all other posts arrive silently (Telegram) |
+| `ONLY_HIGHLIGHTS` | (none) | Labels to keep; posts without one of them are dropped |
 | `POLL_INTERVAL_SECONDS` | 15 (OAuth) / 60 | Seconds between checks |
 | `WHATSAPP_PROVIDER` | `callmebot` | `callmebot`, `waha`, `telegram`, `twilio` or `console` |
 | `DIGEST_THRESHOLD` | 5 | More new posts than this at once → one combined message |

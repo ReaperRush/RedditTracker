@@ -82,12 +82,14 @@ class FakeClient:
 class RecordingNotifier:
     def __init__(self, fail_on=None):
         self.sent = []
+        self.silent = []
         self.fail_on = fail_on
 
-    def send(self, text):
+    def send(self, text, silent=False):
         if self.fail_on and self.fail_on in text:
             raise RuntimeError("boom")
         self.sent.append(text)
+        self.silent.append(silent)
 
 
 def post(pid, title=None, created=0, body="", sub="sub", author="me", flair=None):
@@ -356,3 +358,30 @@ def test_punctuation_terms_match_next_to_letters():
     m = rt.Matcher(["?", "₹"])
     assert m.search("Is this worth it?") and m.search("Price₹500")
     assert not rt.Matcher(["rig"]).search("original")
+
+
+def test_priority_posts_go_first_and_loud_everything_else_silent(tmp_path):
+    batch = [post("q", "Question", 1), post("phone", "Selling iPhone 15", 2), post("pc", "WTS gaming pc", 3)]
+    tracker, notifier = fresh_tracker(tmp_path, [batch], highlights=HIGHLIGHTS, priority_highlights=["Gaming PC"])
+    assert len(tracker.poll_once()) == 3
+    assert notifier.sent[0].startswith("🚨 WTS · Gaming PC")
+    assert notifier.sent[1].startswith("🔥 WTS") and notifier.sent[2].startswith("🆕")
+    assert notifier.silent == [False, True, True]
+
+
+def test_without_priority_everything_is_loud(tmp_path):
+    batch = [post("phone", "Selling iPhone 15", 1), post("q", "Question", 2)]
+    tracker, notifier = fresh_tracker(tmp_path, [batch], highlights=HIGHLIGHTS)
+    tracker.poll_once()
+    assert notifier.silent == [False, False]
+
+
+def test_priority_rejects_unknown_label(tmp_path):
+    with pytest.raises(SystemExit):
+        fresh_tracker(tmp_path, [], highlights=HIGHLIGHTS, priority_highlights=["Gaming"])
+
+
+def test_telegram_silent_flag():
+    session = FakeSession([FakeResponse(200, json_data={"ok": True})])
+    rt.TelegramNotifier("T", "1", session=session).send("hi", silent=True)
+    assert session.calls[0][2]["json"]["disable_notification"] is True

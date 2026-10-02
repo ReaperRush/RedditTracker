@@ -249,7 +249,9 @@ def _strip_html(value: str) -> str:
 
 
 class Notifier(Protocol):
-    def send(self, text: str) -> None: ...
+    def send(self, text: str, silent: bool = False) -> None:
+        """Deliver text. silent=True asks for no sound/vibration where supported."""
+        ...
 
 
 class CallMeBotNotifier:
@@ -262,7 +264,7 @@ class CallMeBotNotifier:
         self.apikey = apikey
         self.session = session or requests.Session()
 
-    def send(self, text: str) -> None:
+    def send(self, text: str, silent: bool = False) -> None:
         resp = self.session.get(
             self.URL,
             params={"phone": self.phone, "text": text, "apikey": self.apikey},
@@ -290,7 +292,7 @@ class TwilioNotifier:
         self.to_number = _whatsapp_addr(to_number)
         self.session = session or requests.Session()
 
-    def send(self, text: str) -> None:
+    def send(self, text: str, silent: bool = False) -> None:
         resp = self.session.post(
             self.url,
             auth=self.auth,
@@ -324,7 +326,7 @@ class WahaNotifier:
         self.headers = {"X-Api-Key": api_key} if api_key else {}
         self.session = session or requests.Session()
 
-    def send(self, text: str) -> None:
+    def send(self, text: str, silent: bool = False) -> None:
         resp = self.session.post(
             self.url,
             json={"session": self.waha_session, "chatId": self.chat_id, "text": text},
@@ -343,10 +345,15 @@ class TelegramNotifier:
         self.chat_id = chat_id
         self.session = session or requests.Session()
 
-    def send(self, text: str) -> None:
+    def send(self, text: str, silent: bool = False) -> None:
         resp = self.session.post(
             self.url,
-            json={"chat_id": self.chat_id, "text": _telegram_html(text), "parse_mode": "HTML"},
+            json={
+                "chat_id": self.chat_id,
+                "text": _telegram_html(text),
+                "parse_mode": "HTML",
+                "disable_notification": silent,
+            },
             timeout=30,
         )
         if resp.status_code != 200 or not resp.json().get("ok"):
@@ -380,8 +387,8 @@ def find_telegram_chats(bot_token: str) -> dict[str, str]:
 class ConsoleNotifier:
     """Prints messages instead of sending them; handy for trying things out."""
 
-    def send(self, text: str) -> None:
-        print("-" * 60 + "\n" + text + "\n" + "-" * 60, flush=True)
+    def send(self, text: str, silent: bool = False) -> None:
+        print("-" * 60 + ("  (silent)" if silent else "") + "\n" + text + "\n" + "-" * 60, flush=True)
 
 
 def _whatsapp_addr(number: str) -> str:
@@ -449,10 +456,13 @@ def _subs(post: Post) -> str:
     return ", ".join(f"r/{s}" for s in [post.subreddit, *post.also_in])
 
 
-def format_post(post: Post) -> str:
+def format_post(post: Post, priority: bool = False) -> str:
     title = post.title if len(post.title) <= 300 else post.title[:297] + "..."
     meta = f"u/{post.author}" + (f" · {post.flair}" if post.flair else "")
-    head = f"🔥 {' · '.join(post.tags)}\n{_subs(post)}" if post.tags else f"🆕 {_subs(post)}"
+    if post.tags:
+        head = f"{'🚨' if priority else '🔥'} {' · '.join(post.tags)}\n{_subs(post)}"
+    else:
+        head = f"🆕 {_subs(post)}"
     return f"{head}\n*{title}*\n{meta}\n{post.short_url}"
 
 
@@ -521,6 +531,7 @@ class Tracker:
         keywords: Optional[list[str]] = None,
         highlights: Optional[dict[str, list[str]]] = None,
         only_highlights: Optional[list[str]] = None,
+        priority_highlights: Optional[list[str]] = None,
         notify_on_start: bool = False,
         digest_threshold: int = 5,
     ):
@@ -536,13 +547,16 @@ class Tracker:
             )
             for label, terms in (highlights or {}).items()
         }
-        unknown = set(only_highlights or []) - set(self.highlights)
-        if unknown:
-            raise SystemExit(
-                f"ONLY_HIGHLIGHTS names {sorted(unknown)}, which aren't labels in HIGHLIGHTS "
-                f"({sorted(self.highlights) or 'none defined'})"
-            )
+        for setting, labels in (("ONLY_HIGHLIGHTS", only_highlights), ("PRIORITY_HIGHLIGHTS", priority_highlights)):
+            unknown = set(labels or []) - set(self.highlights)
+            if unknown:
+                raise SystemExit(
+                    f"{setting} names {sorted(unknown)}, which aren't labels in HIGHLIGHTS "
+                    f"({sorted(self.highlights) or 'none defined'})"
+                )
         self.only_highlights = set(only_highlights or [])
+        # When set, only these posts make a sound; everything else arrives silently.
+        self.priority_highlights = set(priority_highlights or [])
         self.digest_threshold = digest_threshold
         # On the very first run, treat what's already there as seen so you
         # don't get blasted with the last 100 posts.
@@ -583,6 +597,7 @@ class Tracker:
             log.info("First run: marked %d existing posts as seen", len(new))
             return []
 
+        priority: list[list[Post]] = []
         highlighted: list[list[Post]] = []
         regular: list[list[Post]] = []
         for key, group in groups.items():
@@ -595,27 +610,34 @@ class Tracker:
             if self.only_highlights and not self.only_highlights & set(first.tags):
                 mark(group)  # ONLY_HIGHLIGHTS is set and this post has none of them
                 continue
-            (highlighted if first.tags else regular).append(group)
+            if self.priority_highlights & set(first.tags):
+                priority.append(group)
+            else:
+                (highlighted if first.tags else regular).append(group)
 
-        # Highlighted posts always get their own message; the rest are
-        # combined into one digest when there's a burst.
-        batches = [(format_post(g[0]), [g]) for g in highlighted]
+        # Priority posts go first and make a sound. If PRIORITY_HIGHLIGHTS is
+        # set, everything else is delivered silently. Highlighted posts always
+        # get their own message; the rest are combined into one digest when
+        # there's a burst.
+        quiet = bool(self.priority_highlights)
+        batches = [(format_post(g[0], priority=True), [g], False) for g in priority]
+        batches += [(format_post(g[0]), [g], quiet) for g in highlighted]
         if len(regular) > self.digest_threshold:
-            batches.append((format_digest([g[0] for g in regular]), regular))
+            batches.append((format_digest([g[0] for g in regular]), regular, quiet))
         else:
-            batches += [(format_post(g[0]), [g]) for g in regular]
+            batches += [(format_post(g[0]), [g], quiet) for g in regular]
 
         sent: list[Post] = []
         try:
-            for text, batch in batches:
-                self.notifier.send(text)
+            for text, batch, silent in batches:
+                self.notifier.send(text, silent=silent)
                 for group in batch:
                     mark(group)
                     sent.append(group[0])
                     log.info("Notified: %s %s %r", _subs(group[0]), group[0].id, group[0].title)
         except Exception:
             # Unsent posts stay unseen, so they're retried next poll.
-            log.exception("Failed to send WhatsApp message")
+            log.exception("Failed to send notification")
         finally:
             if new:
                 self.store.save()
@@ -623,13 +645,14 @@ class Tracker:
 
     def run(self, interval: float, stop: threading.Event) -> None:
         log.info(
-            "Watching r/%s every %.0fs (mode=%s, keyword filter=%s, highlights=%s, only=%s)",
+            "Watching r/%s every %.0fs (mode=%s, keyword filter=%s, highlights=%s, only=%s, priority=%s)",
             "+".join(self.subreddits),
             interval,
             self.client.mode,
             "on" if self.keywords else "off",
             ", ".join(self.highlights) or "none",
             ", ".join(sorted(self.only_highlights)) or "everything",
+            ", ".join(sorted(self.priority_highlights)) or "all",
         )
         failures = 0
         while not stop.is_set():
@@ -781,6 +804,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         keywords=_split(os.getenv("KEYWORDS"), seps=","),  # phrases may contain spaces
         highlights=parse_highlights(os.getenv("HIGHLIGHTS")),
         only_highlights=_split(os.getenv("ONLY_HIGHLIGHTS"), seps=","),
+        priority_highlights=_split(os.getenv("PRIORITY_HIGHLIGHTS"), seps=","),
         notify_on_start=_env_bool("NOTIFY_ON_START"),
         digest_threshold=int(_env_number("DIGEST_THRESHOLD", 5)),
     )
