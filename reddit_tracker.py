@@ -18,7 +18,7 @@ import sys
 import threading
 import time
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterable, Optional, Protocol
@@ -47,6 +47,8 @@ class Post:
     created_utc: float
     body: str = ""
     flair: Optional[str] = None
+    tags: list[str] = field(default_factory=list)  # matched HIGHLIGHTS labels
+    also_in: list[str] = field(default_factory=list)  # cross-posted to these subs
 
     @property
     def short_url(self) -> str:
@@ -311,10 +313,60 @@ def _whatsapp_addr(number: str) -> str:
 # --------------------------------------------------------------------------- #
 
 
+class Matcher:
+    """Case-insensitive search for any of several terms as whole words.
+
+    "rig" won't match "original" and "sale" won't match "resale", but digits
+    may touch a term, so "rtx" still matches "RTX4060". Spaces in a term
+    also match hyphens or nothing ("gaming pc" ~ "gaming-pc", "gamingpc").
+    """
+
+    def __init__(self, terms: Iterable[str]):
+        parts = [re.escape(t.strip()).replace(r"\ ", r"[\s_-]*") for t in terms if t.strip()]
+        self.pattern = (
+            re.compile(r"(?<![a-z])(?:" + "|".join(parts) + r")(?![a-z])", re.I) if parts else None
+        )
+
+    def __bool__(self) -> bool:
+        return self.pattern is not None
+
+    def search(self, text: str) -> bool:
+        return bool(self.pattern and self.pattern.search(text))
+
+
+def parse_highlights(value: Optional[str]) -> dict[str, list[str]]:
+    """Parse "WTS: wts, selling, -wtb; Gaming PC: gaming pc" into groups.
+
+    A term starting with "-" excludes: the label isn't applied if it matches.
+    """
+    groups: dict[str, list[str]] = {}
+    for chunk in (value or "").split(";"):
+        if not chunk.strip():
+            continue
+        label, sep, terms = chunk.partition(":")
+        if not sep or not label.strip():
+            raise SystemExit(f"HIGHLIGHTS entry {chunk.strip()!r} should look like 'Label: term, term'")
+        groups[label.strip()] = _split(terms, seps=",")
+    return groups
+
+
+def crosspost_key(post: Post) -> Optional[str]:
+    """Same author + same title = the same listing posted to several subs."""
+    if post.author in ("", "[deleted]", "anonymous"):
+        return None
+    title = re.sub(r"[^a-z0-9]+", " ", post.title.lower()).strip()
+    return f"{post.author.lower()}|{title}"
+
+
+def _subs(post: Post) -> str:
+    return ", ".join(f"r/{s}" for s in [post.subreddit, *post.also_in])
+
+
 def format_post(post: Post) -> str:
     title = post.title if len(post.title) <= 300 else post.title[:297] + "..."
     meta = f"u/{post.author}" + (f" · {post.flair}" if post.flair else "")
-    return f"🆕 r/{post.subreddit}\n*{title}*\n{meta}\n{post.short_url}"
+    head = f"🔥 {' · '.join(post.tags)}\n{_subs(post)}" if post.tags else f"🆕 {_subs(post)}"
+    return f"{head}\n*{title}*\n{meta}\n{post.short_url}"
 
 
 def format_digest(posts: list[Post]) -> str:
@@ -322,7 +374,7 @@ def format_digest(posts: list[Post]) -> str:
     lines = [header]
     for i, post in enumerate(posts):
         title = post.title if len(post.title) <= 120 else post.title[:117] + "..."
-        entry = f"\n• r/{post.subreddit}: {title}\n  {post.short_url}"
+        entry = f"\n• {_subs(post)}: {title}\n  {post.short_url}"
         if sum(map(len, lines)) + len(entry) > WHATSAPP_MAX_CHARS - 40:
             lines.append(f"\n…and {len(posts) - i} more")
             break
@@ -331,35 +383,44 @@ def format_digest(posts: list[Post]) -> str:
 
 
 class SeenStore:
-    """Remembers which post IDs were already handled, across restarts."""
+    """Remembers handled post IDs and cross-post keys, across restarts."""
 
     def __init__(self, path: Path):
         self.path = path
         self.ids: list[str] = []
-        self._set: set[str] = set()
+        self.keys: list[str] = []
         self.existed = path.exists()
         if self.existed:
             try:
-                self.ids = json.loads(path.read_text())["seen"]
-            except (ValueError, KeyError, OSError) as exc:
+                data = json.loads(path.read_text())
+                self.ids = list(data["seen"])
+                self.keys = list(data.get("crosspost_keys", []))
+            except (ValueError, KeyError, TypeError, OSError) as exc:
                 log.warning("Could not read %s (%s); starting fresh", path, exc)
-                self.ids = []
-            self._set = set(self.ids)
+                self.ids, self.keys = [], []
+        self._ids = set(self.ids)
+        self._keys = set(self.keys)
 
     def __contains__(self, post_id: str) -> bool:
-        return post_id in self._set
+        return post_id in self._ids
 
-    def add(self, post_id: str) -> None:
-        if post_id not in self._set:
+    def has_key(self, key: Optional[str]) -> bool:
+        return key is not None and key in self._keys
+
+    def add(self, post_id: str, key: Optional[str] = None) -> None:
+        if post_id not in self._ids:
             self.ids.append(post_id)
-            self._set.add(post_id)
+            self._ids.add(post_id)
+        if key is not None and key not in self._keys:
+            self.keys.append(key)
+            self._keys.add(key)
 
     def save(self) -> None:
-        if len(self.ids) > MAX_SEEN_IDS:
-            self.ids = self.ids[-MAX_SEEN_IDS:]
-            self._set = set(self.ids)
+        self.ids = self.ids[-MAX_SEEN_IDS:]
+        self.keys = self.keys[-MAX_SEEN_IDS:]
+        self._ids, self._keys = set(self.ids), set(self.keys)
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-        tmp.write_text(json.dumps({"seen": self.ids}))
+        tmp.write_text(json.dumps({"seen": self.ids, "crosspost_keys": self.keys}))
         tmp.replace(self.path)
 
 
@@ -371,6 +432,7 @@ class Tracker:
         subreddits: list[str],
         store: SeenStore,
         keywords: Optional[list[str]] = None,
+        highlights: Optional[dict[str, list[str]]] = None,
         notify_on_start: bool = False,
         digest_threshold: int = 5,
     ):
@@ -378,17 +440,29 @@ class Tracker:
         self.notifier = notifier
         self.subreddits = subreddits
         self.store = store
-        self.keywords = [k.lower() for k in (keywords or []) if k]
+        self.keywords = Matcher(keywords or [])
+        self.highlights = {
+            label: (
+                Matcher(t for t in terms if not t.startswith("-")),
+                Matcher(t[1:] for t in terms if t.startswith("-")),
+            )
+            for label, terms in (highlights or {}).items()
+        }
         self.digest_threshold = digest_threshold
         # On the very first run, treat what's already there as seen so you
         # don't get blasted with the last 100 posts.
         self._seeding = not store.existed and not notify_on_start
 
     def matches(self, post: Post) -> bool:
-        if not self.keywords:
-            return True
-        haystack = f"{post.title}\n{post.body}".lower()
-        return any(k in haystack for k in self.keywords)
+        return not self.keywords or self.keywords.search(f"{post.title}\n{post.body}")
+
+    def tags_for(self, post: Post) -> list[str]:
+        text = f"{post.title}\n{post.flair or ''}"
+        return [
+            label
+            for label, (include, exclude) in self.highlights.items()
+            if include.search(text) and not exclude.search(text)
+        ]
 
     def poll_once(self) -> list[Post]:
         posts = self.client.fetch_new(self.subreddits)
@@ -397,46 +471,66 @@ class Tracker:
             key=lambda p: p.created_utc,
         )
 
+        # Group cross-posts so one listing in three subs is one message.
+        groups: dict[str, list[Post]] = {}
+        for p in new:
+            groups.setdefault(crosspost_key(p) or f"id:{p.id}", []).append(p)
+
+        def mark(group: list[Post]) -> None:
+            for p in group:
+                self.store.add(p.id, crosspost_key(p))
+
         if self._seeding:
-            for p in new:
-                self.store.add(p.id)
+            for group in groups.values():
+                mark(group)
             self.store.save()
             self._seeding = False
             log.info("First run: marked %d existing posts as seen", len(new))
             return []
 
-        skipped = [p for p in new if not self.matches(p)]
-        wanted = [p for p in new if self.matches(p)]
-        for p in skipped:
-            self.store.add(p.id)
+        highlighted: list[list[Post]] = []
+        regular: list[list[Post]] = []
+        for key, group in groups.items():
+            first = group[0]
+            if self.store.has_key(key) or not self.matches(first):
+                mark(group)  # already notified via another sub, or filtered out
+                continue
+            first.also_in = sorted({p.subreddit for p in group} - {first.subreddit})
+            first.tags = self.tags_for(first)
+            (highlighted if first.tags else regular).append(group)
+
+        # Highlighted posts always get their own message; the rest are
+        # combined into one digest when there's a burst.
+        batches = [(format_post(g[0]), [g]) for g in highlighted]
+        if len(regular) > self.digest_threshold:
+            batches.append((format_digest([g[0] for g in regular]), regular))
+        else:
+            batches += [(format_post(g[0]), [g]) for g in regular]
 
         sent: list[Post] = []
         try:
-            if len(wanted) > self.digest_threshold:
-                self.notifier.send(format_digest(wanted))
-                sent = wanted
-            else:
-                for p in wanted:
-                    self.notifier.send(format_post(p))
-                    sent.append(p)
+            for text, batch in batches:
+                self.notifier.send(text)
+                for group in batch:
+                    mark(group)
+                    sent.append(group[0])
+                    log.info("Notified: %s %s %r", _subs(group[0]), group[0].id, group[0].title)
         except Exception:
             # Unsent posts stay unseen, so they're retried next poll.
             log.exception("Failed to send WhatsApp message")
         finally:
-            for p in sent:
-                self.store.add(p.id)
-                log.info("Notified: r/%s %s %r", p.subreddit, p.id, p.title)
             if new:
                 self.store.save()
         return sent
 
     def run(self, interval: float, stop: threading.Event) -> None:
         log.info(
-            "Watching r/%s every %.0fs (mode=%s%s)",
+            "Watching r/%s every %.0fs (mode=%s, keyword filter=%s, highlights=%s)",
             "+".join(self.subreddits),
             interval,
             self.client.mode,
-            f", keywords={self.keywords}" if self.keywords else "",
+            "on" if self.keywords else "off",
+            ", ".join(self.highlights) or "none",
         )
         failures = 0
         while not stop.is_set():
@@ -476,6 +570,16 @@ def parse_subreddits(value: Optional[str]) -> list[str]:
 
 def _env_bool(name: str, default: bool = False) -> bool:
     return os.getenv(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_number(name: str, default: float) -> float:
+    value = os.getenv(name, "").strip()
+    if not value:
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        raise SystemExit(f"{name} must be a number, got {value!r}")
 
 
 def _require(name: str) -> str:
@@ -521,7 +625,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     try:
         from dotenv import load_dotenv
 
-        load_dotenv()
+        # .env in the current directory, else next to this script.
+        load_dotenv(Path.cwd() / ".env") or load_dotenv(Path(__file__).with_name(".env"))
     except ImportError:
         pass
 
@@ -542,7 +647,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     client = build_client()
     default_interval = 15 if client.mode == "oauth" else 60
-    interval = float(os.getenv("POLL_INTERVAL_SECONDS", default_interval))
+    interval = _env_number("POLL_INTERVAL_SECONDS", default_interval)
 
     tracker = Tracker(
         client,
@@ -550,8 +655,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         subreddits,
         SeenStore(Path(os.getenv("STATE_FILE", "state.json"))),
         keywords=_split(os.getenv("KEYWORDS"), seps=","),  # phrases may contain spaces
+        highlights=parse_highlights(os.getenv("HIGHLIGHTS")),
         notify_on_start=_env_bool("NOTIFY_ON_START"),
-        digest_threshold=int(os.getenv("DIGEST_THRESHOLD", "5")),
+        digest_threshold=int(_env_number("DIGEST_THRESHOLD", 5)),
     )
 
     if args.once:

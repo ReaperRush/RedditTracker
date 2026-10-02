@@ -4,14 +4,19 @@ Watches a set of subreddits and sends you a WhatsApp message the moment a new
 post appears.
 
 ```
-🆕 r/buildapcsales
-*[GPU] RTX 5080 - $899 at Micro Center*
-u/someone · GPU
+🔥 WTS · Gaming PC
+r/IndianPCHardware
+*[WTS] [Mumbai] Gaming PC (i5-14600K / RTX 4070 Super) - 95,000*
+u/someone · Sale
 https://redd.it/1abcde
 ```
 
 - One request per check covers all your subreddits.
-- Optional keyword filter (title or body).
+- **Highlights:** posts matching your categories (e.g. WTS, Gaming PC) get a
+  🔥 header and are always sent individually. Everything else still comes
+  through as 🆕.
+- A listing cross-posted to several of your subs is sent once, naming all of them.
+- Optional keyword filter (title or body) if you only want matching posts.
 - Remembers what it already sent (`state.json`), so restarts don't cause duplicates.
 - The first run stays quiet and only marks the current posts as seen.
 - A burst of posts arrives as one combined message instead of many separate ones.
@@ -87,11 +92,31 @@ Avoid scheduled CI jobs such as GitHub Actions cron. They run at most every
 |---|---|---|
 | `SUBREDDITS` | (required) | Comma-separated subreddits |
 | `KEYWORDS` | (none) | Comma-separated; notify only when one appears in the title or body |
+| `HIGHLIGHTS` | (none) | `Label: term, term, -exclude; Label: …`, see below |
 | `POLL_INTERVAL_SECONDS` | 15 (OAuth) / 60 | Seconds between checks |
 | `WHATSAPP_PROVIDER` | `callmebot` | `callmebot`, `twilio` or `console` |
 | `DIGEST_THRESHOLD` | 5 | More new posts than this at once → one combined message |
 | `NOTIFY_ON_START` | `false` | Notify about the current posts on the very first run |
 | `STATE_FILE` | `state.json` | Where already-seen post IDs are stored |
+
+## Highlights
+
+`HIGHLIGHTS` tags posts without filtering anything out. Each `Label: terms`
+group is checked against the post title and flair:
+
+- Terms match whole words, case-insensitively: `rig` doesn't match
+  "original" and `sale` doesn't match "resale". Digits may touch a term, so
+  `rtx` matches "RTX4060".
+- Spaces in a term also match hyphens or nothing: `gaming pc` matches
+  "gaming-pc" and "gamingpc".
+- A term starting with `-` blocks that label. For example, `-wtb` and
+  `-budget` keep "Anyone selling a 3050 laptop? budget 40k" from being
+  tagged WTS.
+
+The WTS rule in `.env.example` treats a price in the title (₹, Rs, INR) as a
+sale, because many r/IndiaUsedTech listings look like
+`[Phone] S24 | Mumbai | ₹45000` and never say "WTS". It was tuned against
+about 100 recent posts from those four subreddits.
 
 ## Tests
 

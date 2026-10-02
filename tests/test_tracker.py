@@ -90,8 +90,8 @@ class RecordingNotifier:
         self.sent.append(text)
 
 
-def post(pid, title="t", created=0, body=""):
-    return rt.Post(pid, "sub", title, "me", "https://x", created, body)
+def post(pid, title=None, created=0, body="", sub="sub", author="me", flair=None):
+    return rt.Post(pid, sub, title or f"title {pid}", author, "https://x", created, body, flair)
 
 
 def test_parse_listing():
@@ -210,3 +210,100 @@ def test_twilio_sends_whatsapp_addresses():
     rt.TwilioNotifier("AC1", "tok", "+14155238886", "+15551234567", session=session).send("hi")
     data = session.calls[0][2]["data"]
     assert data == {"From": "whatsapp:+14155238886", "To": "whatsapp:+15551234567", "Body": "hi"}
+
+
+HIGHLIGHTS = rt.parse_highlights(
+    "WTS: wts, selling, sell, resell, for sale, sale, ₹, rs, inr, "
+    "-wtb, -looking for, -anyone selling, -budget, -where should i sell, -suggestions; "
+    "Gaming PC: gaming pc, gaming rig, pc build, desktop, rig, prebuilt"
+)
+
+
+def fresh_tracker(tmp_path, batches, **kwargs):
+    (tmp_path / "s.json").write_text('{"seen": []}')
+    notifier = RecordingNotifier()
+    tracker = rt.Tracker(FakeClient(batches), notifier, ["sub"], rt.SeenStore(tmp_path / "s.json"), **kwargs)
+    return tracker, notifier
+
+
+@pytest.mark.parametrize("title, tags", [
+    ("[WTS] [Mumbai] Gaming PC (i5-14600K / RTX 4070 Super) - 95,000", ["WTS", "Gaming PC"]),
+    ("Old i3 Gaming PC + GTX 1050 Ti — ₹16,000", ["WTS", "Gaming PC"]),
+    ("[SELLING] ASUS ROG G17 IN FLAWLESS CONDITION", ["WTS"]),
+    ("Black Myth Wukong PS5 in brand new condition for sale", ["WTS"]),
+    ("Trying to sell a De-lidded Ryzen 5 5500GT", ["WTS"]),
+    ("wts/trade/exchange nikon coolpix", ["WTS"]),
+    ("[Desktop] [Lenovo] IdeaCentre Gaming 3 | RTX 3060", ["Gaming PC"]),
+    ("Ghost of Yotei (PS5 disc) resale", []),          # "sale" inside "resale"
+    ("Original Xbox controller", []),                  # "rig" inside "original"
+    ("Looking to buy ps4 pro or xbox series s", []),
+    ("Check my gamingpc", ["Gaming PC"]),
+    ("Colorful GTX 1050 Ti — ₹11,000", ["WTS"]),
+    ("[Phone][Android] S24| 8gb,256gb|Mumbai|₹45000", ["WTS"]),
+    ("[SSD][WD] SN7100 | 1 TB | Raiganj| Rs.16000", ["WTS"]),
+    ("Iphone 15 6/128 resell", ["WTS"]),
+    ("Anyone selling their 3050 Laptop around Hyderabad? my budget is slim", []),
+    ("Graphics Card died, looking for a used GPU under ₹15,000", []),
+    ("WTB gaming pc, have cash", ["Gaming PC"]),       # exclusions only apply to their own label
+    ("2020 Range Rover Sports SE", []),
+    ("Suggestions for the best value for money gpu under ₹30k", []),
+])
+def test_highlight_tags(tmp_path, title, tags):
+    tracker, _ = fresh_tracker(tmp_path, [], highlights=HIGHLIGHTS)
+    assert tracker.tags_for(post("x", title)) == tags
+
+
+def test_sale_flair_counts_as_wts(tmp_path):
+    tracker, _ = fresh_tracker(tmp_path, [], highlights=HIGHLIGHTS)
+    assert tracker.tags_for(post("x", "RTX 4070 build", flair="Sale")) == ["WTS"]
+
+
+def test_highlighted_posts_skip_the_digest(tmp_path):
+    batch = [post(f"p{i}", f"Question {i}", i) for i in range(8)] + [post("hot", "WTS gaming pc", 9)]
+    tracker, notifier = fresh_tracker(tmp_path, [batch], highlights=HIGHLIGHTS, digest_threshold=5)
+    assert len(tracker.poll_once()) == 9
+    assert notifier.sent[0].startswith("🔥 WTS · Gaming PC\nr/sub\n*WTS gaming pc*")
+    assert notifier.sent[1].startswith("🆕 8 new posts")
+    assert len(notifier.sent) == 2
+
+
+def test_crossposts_become_one_message(tmp_path):
+    batch = [
+        post("a", "WTS Multiple Electronics items", 1, sub="IndiaUsedTech", author="bob"),
+        post("b", "WTS Multiple Electronics items!", 2, sub="Indiangaming_Resale", author="bob"),
+        post("c", "WTS Multiple Electronics items", 3, sub="IndiaUsedTech", author="alice"),
+    ]
+    tracker, notifier = fresh_tracker(tmp_path, [batch])
+    assert [p.id for p in tracker.poll_once()] == ["a", "c"]
+    assert "r/IndiaUsedTech, r/Indiangaming_Resale" in notifier.sent[0]
+    assert "b" in tracker.store
+
+
+def test_crosspost_in_a_later_poll_is_not_resent(tmp_path):
+    first = [post("a", "Selling RTX 3060", 1, sub="IndianPCHardware", author="bob")]
+    later = first + [post("b", "Selling RTX 3060", 200, sub="IndiaUsedTech", author="bob")]
+    tracker, notifier = fresh_tracker(tmp_path, [first, later])
+    tracker.poll_once()
+    assert tracker.poll_once() == []
+    assert len(notifier.sent) == 1
+    # ...and that survives a restart
+    assert rt.SeenStore(tmp_path / "s.json").has_key(rt.crosspost_key(later[1]))
+
+
+def test_old_state_file_without_crosspost_keys_loads(tmp_path):
+    (tmp_path / "s.json").write_text('{"seen": ["a"]}')
+    store = rt.SeenStore(tmp_path / "s.json")
+    assert "a" in store and store.keys == []
+
+
+def test_parse_highlights_rejects_missing_label():
+    with pytest.raises(SystemExit):
+        rt.parse_highlights("wts, selling")
+
+
+def test_blank_numeric_settings_use_defaults(monkeypatch):
+    monkeypatch.setenv("POLL_INTERVAL_SECONDS", "")
+    assert rt._env_number("POLL_INTERVAL_SECONDS", 60) == 60
+    monkeypatch.setenv("POLL_INTERVAL_SECONDS", "abc")
+    with pytest.raises(SystemExit):
+        rt._env_number("POLL_INTERVAL_SECONDS", 60)
