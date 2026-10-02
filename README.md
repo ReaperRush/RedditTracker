@@ -20,32 +20,82 @@ https://redd.it/1abcde
 - Remembers what it already sent (`state.json`), so restarts don't cause duplicates.
 - The first run stays quiet and only marks the current posts as seen.
 - A burst of posts arrives as one combined message instead of many separate ones.
-- A failed WhatsApp send is retried on the next check.
+- A failed send is retried on the next check.
 - Backs off when Reddit rate-limits it.
 
-## 1. Set up WhatsApp delivery
+## 1. Set up notifications
 
-Pick one.
+| Option | Cost | Setup | Catch |
+|---|---|---|---|
+| [CallMeBot](#callmebot) | Free | 2 min | The bot doesn't always reply with a key |
+| [WAHA](#waha-self-hosted-whatsapp) | Free | 15 min, Docker | Needs a second WhatsApp number to send from |
+| [Telegram](#telegram) | Free | 3 min | It's Telegram, not WhatsApp |
+| [Twilio](#twilio) | Trial credit, then paid | 10 min | Sandbox needs you to message it daily |
 
-### Option A: CallMeBot (free, about 2 minutes, best for personal use)
+Then check it with `python reddit_tracker.py --test-message`.
 
-1. Open https://www.callmebot.com/blog/free-api-whatsapp-messages/ and add
-   the phone number shown there to your contacts.
-2. From WhatsApp, send that contact: `I allow callmebot to send me messages`
-3. You get a reply with your API key.
-4. In `.env`, set `WHATSAPP_PROVIDER=callmebot`, `CALLMEBOT_PHONE=+<your number>`
-   and `CALLMEBOT_APIKEY=<key>`.
+### CallMeBot
 
-### Option B: Twilio (paid per message, more reliable)
+1. Save **+34 684 770 005** as a contact. Check
+   [their page](https://www.callmebot.com/blog/free-api-whatsapp-messages/)
+   in case the number has changed.
+2. Send it exactly: `I allow callmebot to send me messages`
+3. It replies with your API key. Set `WHATSAPP_PROVIDER=callmebot`,
+   `CALLMEBOT_PHONE=+91…` and `CALLMEBOT_APIKEY=…`.
+
+**No reply?** CallMeBot says that if the key doesn't arrive within 2 minutes,
+you should try again **after 24 hours**. Sending more messages in the meantime
+doesn't help. Use one of the options below meanwhile.
+
+### WAHA (self-hosted WhatsApp)
+
+[WAHA](https://waha.devlike.pro) runs WhatsApp Web in a Docker container and
+exposes it as an HTTP API. It's free, with no message limits, and doesn't need
+daily check-ins.
+
+**You need a second WhatsApp number to send from.** A message your own
+account sends to itself doesn't trigger a notification on your phone. The
+usual setup is **WhatsApp Business on a second SIM or eSIM**: link that
+account to WAHA, and it messages your main number.
+
+WAHA is unofficial: WhatsApp doesn't sanction it, and the linked number could
+be banned. That's another reason not to use your main number as the sender.
+
+1. In `.env`, set `WHATSAPP_PROVIDER=waha`, `WAHA_TO=+91<your main number>`
+   and a long random `WAHA_API_KEY`.
+2. Start WAHA together with the tracker:
+   ```bash
+   docker compose --profile waha up -d
+   ```
+3. Open http://localhost:3000/dashboard and log in as `admin`, using your
+   `WAHA_API_KEY` as the password. Start the `default` session, then scan the
+   QR code with the **second** phone (*WhatsApp → Linked devices → Link a device*).
+4. Send a test: `docker compose exec tracker python reddit_tracker.py --test-message`
+
+If you run the tracker outside Docker, keep `WAHA_URL=http://localhost:3000`.
+
+### Telegram
+
+Official, free and instant. Telegram bots are designed for this kind of alert.
+
+1. In Telegram, message **@BotFather** → `/newbot` → copy the token into
+   `TELEGRAM_BOT_TOKEN`.
+2. Open your new bot and send it any message.
+3. Run `python reddit_tracker.py --telegram-chat-id` and copy the printed
+   line into `.env`.
+4. Set `WHATSAPP_PROVIDER=telegram`.
+
+### Twilio
 
 1. Create a Twilio account and open *Messaging → Try it out → Send a WhatsApp message*.
 2. From your phone, send the `join <code>` message to the sandbox number.
 3. Set `WHATSAPP_PROVIDER=twilio`, plus `TWILIO_ACCOUNT_SID`,
-   `TWILIO_AUTH_TOKEN` and `TWILIO_TO=whatsapp:+<your number>`.
+   `TWILIO_AUTH_TOKEN` and `TWILIO_TO=whatsapp:+91…`.
 
-The sandbox requires you to send it a message again every 72 hours. For
-long-term use, register your own WhatsApp sender in Twilio and set
-`TWILIO_FROM`.
+The sandbox has two limits. It can only message you within **24 hours of your
+last message to it**, so you need to text it every day. You also have to
+**re-join every 3 days**. Getting past both requires a registered WhatsApp
+sender and approved message templates.
 
 ## 2. (Recommended) Reddit API credentials
 
@@ -77,11 +127,7 @@ For instant alerts, the tracker has to run all the time. Some options:
 
 - **Your own always-on machine / Raspberry Pi / VPS:** use the included
   `reddit-tracker.service` (systemd) so it starts on boot and restarts on failure.
-- **Docker:**
-  ```bash
-  docker build -t reddit-tracker .
-  docker run -d --restart=always --env-file .env -v reddit-tracker-data:/data reddit-tracker
-  ```
+- **Docker:** `docker compose up -d` (add `--profile waha` if you use WAHA).
 
 Avoid scheduled CI jobs such as GitHub Actions cron. They run at most every
 5 minutes, often late, and Reddit blocks most of their IPs.
@@ -94,7 +140,7 @@ Avoid scheduled CI jobs such as GitHub Actions cron. They run at most every
 | `KEYWORDS` | (none) | Comma-separated; notify only when one appears in the title or body |
 | `HIGHLIGHTS` | (none) | `Label: term, term, -exclude; Label: …`, see below |
 | `POLL_INTERVAL_SECONDS` | 15 (OAuth) / 60 | Seconds between checks |
-| `WHATSAPP_PROVIDER` | `callmebot` | `callmebot`, `twilio` or `console` |
+| `WHATSAPP_PROVIDER` | `callmebot` | `callmebot`, `waha`, `telegram`, `twilio` or `console` |
 | `DIGEST_THRESHOLD` | 5 | More new posts than this at once → one combined message |
 | `NOTIFY_ON_START` | `false` | Notify about the current posts on the very first run |
 | `STATE_FILE` | `state.json` | Where already-seen post IDs are stored |

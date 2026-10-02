@@ -296,6 +296,82 @@ class TwilioNotifier:
             raise RuntimeError(f"Twilio error {resp.status_code}: {resp.text[:300]}")
 
 
+class WahaNotifier:
+    """WhatsApp through a self-hosted WAHA gateway (https://waha.devlike.pro).
+
+    WAHA logs in to a WhatsApp account the way WhatsApp Web does. Link a
+    second number (e.g. WhatsApp Business on a spare SIM) as the sender:
+    messages from your own account to yourself don't trigger a notification.
+    """
+
+    def __init__(
+        self,
+        base_url: str,
+        to_number: str,
+        waha_session: str = "default",
+        api_key: Optional[str] = None,
+        session: Optional[requests.Session] = None,
+    ):
+        self.url = base_url.rstrip("/") + "/api/sendText"
+        to_number = to_number.strip()
+        self.chat_id = to_number if "@" in to_number else re.sub(r"\D", "", to_number) + "@c.us"
+        self.waha_session = waha_session
+        self.headers = {"X-Api-Key": api_key} if api_key else {}
+        self.session = session or requests.Session()
+
+    def send(self, text: str) -> None:
+        resp = self.session.post(
+            self.url,
+            json={"session": self.waha_session, "chatId": self.chat_id, "text": text},
+            headers=self.headers,
+            timeout=30,
+        )
+        if resp.status_code >= 300:
+            raise RuntimeError(f"WAHA error {resp.status_code}: {resp.text[:300]}")
+
+
+class TelegramNotifier:
+    """Messages from your own Telegram bot (create one with @BotFather)."""
+
+    def __init__(self, bot_token: str, chat_id: str, session: Optional[requests.Session] = None):
+        self.url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        self.chat_id = chat_id
+        self.session = session or requests.Session()
+
+    def send(self, text: str) -> None:
+        resp = self.session.post(
+            self.url,
+            json={"chat_id": self.chat_id, "text": _telegram_html(text), "parse_mode": "HTML"},
+            timeout=30,
+        )
+        if resp.status_code != 200 or not resp.json().get("ok"):
+            raise RuntimeError(f"Telegram error {resp.status_code}: {resp.text[:300]}")
+
+
+def _telegram_html(text: str) -> str:
+    """Escape for Telegram's HTML mode, turning WhatsApp-style *bold* lines into <b>."""
+    lines = []
+    for line in text.split("\n"):
+        m = re.fullmatch(r"\*(.+)\*", line)
+        lines.append(f"<b>{html.escape(m.group(1))}</b>" if m else html.escape(line))
+    return "\n".join(lines)
+
+
+def find_telegram_chats(bot_token: str) -> dict[str, str]:
+    """Chats that have messaged the bot recently, as {chat_id: name}."""
+    resp = requests.get(f"https://api.telegram.org/bot{bot_token}/getUpdates", timeout=30)
+    resp.raise_for_status()
+    chats = {}
+    for update in resp.json().get("result", []):
+        chat = (update.get("message") or update.get("my_chat_member") or {}).get("chat")
+        if chat:
+            name = chat.get("title") or " ".join(
+                filter(None, [chat.get("first_name"), chat.get("last_name")])
+            )
+            chats[str(chat["id"])] = name or chat.get("username", "")
+    return chats
+
+
 class ConsoleNotifier:
     """Prints messages instead of sending them; handy for trying things out."""
 
@@ -600,9 +676,21 @@ def build_notifier() -> Notifier:
             os.getenv("TWILIO_FROM", "whatsapp:+14155238886"),  # Twilio sandbox
             _require("TWILIO_TO"),
         )
+    if provider == "waha":
+        return WahaNotifier(
+            os.getenv("WAHA_URL", "http://localhost:3000"),
+            _require("WAHA_TO"),
+            os.getenv("WAHA_SESSION", "default"),
+            os.getenv("WAHA_API_KEY", "").strip() or None,
+        )
+    if provider == "telegram":
+        return TelegramNotifier(_require("TELEGRAM_BOT_TOKEN"), _require("TELEGRAM_CHAT_ID"))
     if provider == "console":
         return ConsoleNotifier()
-    raise SystemExit(f"Unknown WHATSAPP_PROVIDER: {provider!r} (use callmebot, twilio or console)")
+    raise SystemExit(
+        f"Unknown WHATSAPP_PROVIDER: {provider!r} "
+        "(use callmebot, waha, twilio, telegram or console)"
+    )
 
 
 def build_client() -> RedditClient:
@@ -618,7 +706,12 @@ def build_client() -> RedditClient:
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--once", action="store_true", help="poll a single time and exit")
-    parser.add_argument("--test-message", action="store_true", help="send a test WhatsApp message and exit")
+    parser.add_argument("--test-message", action="store_true", help="send a test message and exit")
+    parser.add_argument(
+        "--telegram-chat-id",
+        action="store_true",
+        help="print the chat ID of whoever messaged your Telegram bot, and exit",
+    )
     parser.add_argument("--dry-run", action="store_true", help="print messages instead of sending them")
     args = parser.parse_args(argv)
 
@@ -635,9 +728,17 @@ def main(argv: Optional[list[str]] = None) -> int:
         format="%(asctime)s %(levelname)s %(message)s",
     )
 
+    if args.telegram_chat_id:
+        chats = find_telegram_chats(_require("TELEGRAM_BOT_TOKEN"))
+        if not chats:
+            print("No messages found. Send your bot any message in Telegram, then run this again.")
+        for chat_id, name in chats.items():
+            print(f"TELEGRAM_CHAT_ID={chat_id}    # {name}")
+        return 0
+
     notifier = ConsoleNotifier() if args.dry_run else build_notifier()
     if args.test_message:
-        notifier.send("✅ Reddit tracker is connected to WhatsApp.")
+        notifier.send("✅ Reddit tracker is connected.")
         log.info("Test message sent")
         return 0
 

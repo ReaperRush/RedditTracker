@@ -307,3 +307,33 @@ def test_blank_numeric_settings_use_defaults(monkeypatch):
     monkeypatch.setenv("POLL_INTERVAL_SECONDS", "abc")
     with pytest.raises(SystemExit):
         rt._env_number("POLL_INTERVAL_SECONDS", 60)
+
+
+def test_waha_sends_to_phone_chat_id():
+    session = FakeSession([FakeResponse(201, json_data={"id": "x"})])
+    rt.WahaNotifier("http://waha:3000/", "+91 98765-43210", api_key="k", session=session).send("hi")
+    method, url, kwargs = session.calls[0]
+    assert url == "http://waha:3000/api/sendText"
+    assert kwargs["json"] == {"session": "default", "chatId": "919876543210@c.us", "text": "hi"}
+    assert kwargs["headers"] == {"X-Api-Key": "k"}
+
+
+def test_waha_error_raises():
+    session = FakeSession([FakeResponse(422, text="session not ready")])
+    with pytest.raises(RuntimeError):
+        rt.WahaNotifier("http://waha:3000", "919876543210", session=session).send("hi")
+
+
+def test_telegram_converts_bold_and_escapes():
+    session = FakeSession([FakeResponse(200, json_data={"ok": True})])
+    rt.TelegramNotifier("TOKEN", "42", session=session).send(rt.format_post(post("a", "RAM <16GB> & SSD")))
+    method, url, kwargs = session.calls[0]
+    assert url == "https://api.telegram.org/botTOKEN/sendMessage"
+    assert kwargs["json"]["parse_mode"] == "HTML"
+    assert "<b>RAM &lt;16GB&gt; &amp; SSD</b>" in kwargs["json"]["text"]
+
+
+def test_telegram_not_ok_raises():
+    session = FakeSession([FakeResponse(400, json_data={"ok": False, "description": "chat not found"})])
+    with pytest.raises(RuntimeError):
+        rt.TelegramNotifier("TOKEN", "42", session=session).send("hi")
