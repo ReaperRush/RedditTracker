@@ -415,3 +415,12 @@ def test_subreddit_names_dont_trigger_word_rules(tmp_path):
     tracker, _ = fresh_tracker(tmp_path, [], highlights=rules)
     for sub in ("IndianPCHardware", "Indiangaming_Resale", "resellpur", "IndiaBuySell", "hwswapindia"):
         assert tracker.tags_for(post("x", "Lenovo M8 tablet", sub=sub)) == [], sub
+
+
+def test_crosspost_key_ignores_bracket_tags():
+    a = post("a", "[FS][Delhi] Barely used Threadripper 9960X + RTX 5090", author="bob")
+    b = post("b", "[Sell][Delhi] Barely used Threadripper 9960X + RTX 5090", author="bob")
+    c = post("c", "{WTS} Barely used Threadripper 9960X + RTX 5090!", author="bob")
+    assert rt.crosspost_key(a) == rt.crosspost_key(b) == rt.crosspost_key(c)
+    # a title that is only bracket tags still gets a usable key
+    assert rt.crosspost_key(post("d", "[WTS][PC]", author="bob")) == "bob|wts pc"

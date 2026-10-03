@@ -448,7 +448,10 @@ def crosspost_key(post: Post) -> Optional[str]:
     """Same author + same title = the same listing posted to several subs."""
     if post.author in ("", "[deleted]", "anonymous"):
         return None
-    title = re.sub(r"[^a-z0-9]+", " ", post.title.lower()).strip()
+    # Ignore tags like [FS] / [Sell] / [Delhi] / {WTS}: sellers often vary
+    # them between subreddits for the same listing.
+    title = re.sub(r"\[[^\]]*\]|\{[^}]*\}", " ", post.title.lower())
+    title = re.sub(r"[^a-z0-9]+", " ", title).strip() or re.sub(r"[^a-z0-9]+", " ", post.title.lower()).strip()
     return f"{post.author.lower()}|{title}"
 
 
