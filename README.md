@@ -18,7 +18,8 @@ https://redd.it/1abcde
 - **Priority alerts:** choose which categories buzz your phone, and
   optionally drop everything else. The default `.env.example` sends **only
   gaming PCs and graphics cards that are for sale**
-  (`ONLY_HIGHLIGHTS=WTS+Gaming PC, WTS+GPU`), each with a 🚨 and a sound.
+  (`ONLY_HIGHLIGHTS=WTS+Gaming PC, WTS+GPU`), each with a 🚨 and a sound,
+  plus silent "what's my PC worth?" posts from owners who might sell.
 - A listing cross-posted to several of your subs is sent once, naming all of them.
 - Optional keyword filter (title or body) if you only want matching posts.
 - Remembers what it already sent (`state.json`), so restarts don't cause duplicates.
@@ -209,10 +210,14 @@ The default rules in `.env.example`:
   `loq`, `zephyrus`, …) and "pc parts" / "pc components".
 - **GPU:** an NVIDIA, AMD or Intel graphics card (`rtx`, `gtx`, `radeon`,
   `rx`, `arc a`, …), excluding laptops and shoes ("GTX" Gore-Tex).
+- **Possible seller:** an owner asking what their PC is worth ("What is my
+  PC worth?", "how much can I sell…"). These aren't listings, but they're
+  people you could message. They're sent silently, so only real listings
+  make a sound.
 
-On 695 recent posts from the subreddits, these rules sent 32 notifications:
-20 gaming PCs for sale, 11 graphics cards for sale, and one unclear
-"RTX 4080/RX 9070" post. Everything else (laptops, phones, consoles, CPU or
+On 695 recent posts from the subreddits, these rules sent 32 notifications
+with sound (20 gaming PCs for sale, 11 graphics cards for sale and one
+unclear "RTX 4080/RX 9070" post), plus 3 silent "what's my PC worth" posts. Everything else (laptops, phones, consoles, CPU or
 RAM-only sales, questions and buy requests) was dropped.
 
 To update a server installed earlier to the latest rules, keeping your token
