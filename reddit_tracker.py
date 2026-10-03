@@ -575,7 +575,9 @@ class Tracker:
         return not self.keywords or self.keywords.search(f"{post.title}\n{post.body}")
 
     def tags_for(self, post: Post) -> list[str]:
-        text = f"{post.title}\n{post.flair or ''}"
+        # The subreddit is matched too, so a rule can say "any post in
+        # r/IndiaUsedTech counts" by listing r/IndiaUsedTech as a term.
+        text = f"{post.title}\n{post.flair or ''}\nr/{post.subreddit}"
         return [
             label
             for label, (include, exclude) in self.highlights.items()

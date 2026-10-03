@@ -15,10 +15,10 @@ https://redd.it/1abcde
 - **Highlights:** posts matching your categories (e.g. WTS, Gaming PC) get a
   🔥 header and are always sent individually. Everything else still comes
   through as 🆕.
-- **Priority alerts:** choose which categories buzz your phone. With
-  `PRIORITY_HIGHLIGHTS=WTS+Gaming PC` (the default), gaming PCs **for sale**
-  arrive first with a 🚨 and a sound. Every other post, including gaming-PC
-  questions and buy requests, arrives silently in the same chat (Telegram).
+- **Priority alerts:** choose which categories buzz your phone, and
+  optionally drop everything else. The default `.env.example` sends **only
+  gaming PCs and graphics cards that are for sale**
+  (`ONLY_HIGHLIGHTS=WTS+Gaming PC, WTS+GPU`), each with a 🚨 and a sound.
 - A listing cross-posted to several of your subs is sent once, naming all of them.
 - Optional keyword filter (title or body) if you only want matching posts.
 - Remembers what it already sent (`state.json`), so restarts don't cause duplicates.
@@ -195,13 +195,32 @@ group is checked against the post title and flair:
   `-budget` keep "Anyone selling a 3050 laptop? budget 40k" from being
   tagged WTS.
 
-The WTS rule in `.env.example` treats a price in the title (₹, Rs, INR,
-"negotiable") and r/IndiaUsedTech's `[PC]` / `[PC/DESKTOP]` listing tags as a
-sale, and excludes buy requests and questions (`wtb`, `anyone selling`, `fair
-price`, `rate my`, `?`, …). Combined with the Gaming PC rule, it was checked
-against 695 recent posts from the five subreddits: 22 would buzz, and 21 of
-those were gaming PCs for sale. The other 619 posts, including ~50 gaming-PC
-questions and buy requests, arrived silently.
+Rules also see the subreddit, so a term like `r/IndiaUsedTech` matches every
+post there.
+
+The default rules in `.env.example`:
+
+- **WTS:** a sale. That means sale words or a price (₹, Rs, "negotiable"),
+  r/IndiaUsedTech's `[PC]` / `[PC/DESKTOP]` tags, or any post in one of the
+  buy/sell subreddits. Buy requests and questions are excluded (`wtb`,
+  `buying`, `fair price`, `rate my`, `help`, `?`, …). r/IndianPCHardware is
+  mostly discussion, so it isn't listed there and needs real sale words.
+- **Gaming PC:** a desktop or gaming PC, excluding laptops (`laptop`, `hx`,
+  `loq`, `zephyrus`, …) and "pc parts" / "pc components".
+- **GPU:** an NVIDIA, AMD or Intel graphics card (`rtx`, `gtx`, `radeon`,
+  `rx`, `arc a`, …), excluding laptops and shoes ("GTX" Gore-Tex).
+
+On 695 recent posts from the subreddits, these rules sent 32 notifications:
+20 gaming PCs for sale, 11 graphics cards for sale, and one unclear
+"RTX 4080/RX 9070" post. Everything else (laptops, phones, consoles, CPU or
+RAM-only sales, questions and buy requests) was dropped.
+
+To update a server installed earlier to the latest rules, keeping your token
+and subreddits:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ReaperRush/RedditTracker/master/deploy/setup-vps.sh | sudo UPDATE_FILTERS=1 bash
+```
 
 ## Tests
 

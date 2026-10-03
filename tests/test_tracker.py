@@ -400,3 +400,18 @@ def test_priority_combination_requires_all_labels(tmp_path):
 def test_combination_with_unknown_label_rejected(tmp_path):
     with pytest.raises(SystemExit):
         fresh_tracker(tmp_path, [], highlights=HIGHLIGHTS, priority_highlights=["WTS+Laptop"])
+
+
+def test_rules_can_match_the_subreddit(tmp_path):
+    rules = rt.parse_highlights("WTS: selling, r/IndiaUsedTech, -wtb")
+    tracker, _ = fresh_tracker(tmp_path, [], highlights=rules)
+    assert tracker.tags_for(post("a", "RTX 3060 Zotac", sub="IndiaUsedTech")) == ["WTS"]
+    assert tracker.tags_for(post("b", "RTX 3060 Zotac", sub="IndianPCHardware")) == []
+    assert tracker.tags_for(post("c", "WTB RTX 3060", sub="IndiaUsedTech")) == []
+
+
+def test_subreddit_names_dont_trigger_word_rules(tmp_path):
+    rules = rt.parse_highlights("PC: pc, gaming, sale, sell, rig")
+    tracker, _ = fresh_tracker(tmp_path, [], highlights=rules)
+    for sub in ("IndianPCHardware", "Indiangaming_Resale", "resellpur", "IndiaBuySell", "hwswapindia"):
+        assert tracker.tags_for(post("x", "Lenovo M8 tablet", sub=sub)) == [], sub

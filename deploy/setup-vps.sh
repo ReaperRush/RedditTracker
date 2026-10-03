@@ -8,6 +8,10 @@
 # crashes, and sends a test message. Run the same command again to update.
 #
 # Non-interactive: pass TELEGRAM_BOT_TOKEN=... TELEGRAM_CHAT_ID=... to sudo.
+#
+# To also replace your notification filters (HIGHLIGHTS, ONLY_HIGHLIGHTS,
+# PRIORITY_HIGHLIGHTS) with the latest ones from .env.example, keeping your
+# token, chat ID and subreddits:  ... | sudo UPDATE_FILTERS=1 bash
 set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/ReaperRush/RedditTracker.git}"
@@ -79,6 +83,13 @@ main() {
     set_env WHATSAPP_PROVIDER telegram
     set_env TELEGRAM_BOT_TOKEN "$TELEGRAM_BOT_TOKEN"
     set_env TELEGRAM_CHAT_ID "$TELEGRAM_CHAT_ID"
+  fi
+  if [ "${UPDATE_FILTERS:-0}" = 1 ] && ! $first_install; then
+    say "Updating notification filters from .env.example"
+    local key
+    for key in HIGHLIGHTS ONLY_HIGHLIGHTS PRIORITY_HIGHLIGHTS; do
+      set_env "$key" "$(grep -m1 "^$key=" "$APP_DIR/.env.example" | cut -d= -f2-)"
+    done
   fi
   # Secrets live here: readable by root and the service only.
   chown "root:$APP_USER" "$ENV_FILE"
