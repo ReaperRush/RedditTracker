@@ -424,3 +424,21 @@ def test_crosspost_key_ignores_bracket_tags():
     assert rt.crosspost_key(a) == rt.crosspost_key(b) == rt.crosspost_key(c)
     # a title that is only bracket tags still gets a usable key
     assert rt.crosspost_key(post("d", "[WTS][PC]", author="bob")) == "bob|wts pc"
+
+
+def test_numbers_dont_match_inside_bigger_numbers():
+    m = rt.Matcher(["3060"])
+    assert m.search("Zotac 3060ti") and m.search("RTX3060") and m.search("rtx 3060 12gb")
+    assert not m.search("price 13060") and not m.search("30601")
+
+
+def test_body_terms(tmp_path):
+    rules = rt.parse_highlights("PC: gaming pc, body:motherboard, body:3060, -laptop, -body:laptop")
+    tracker, _ = fresh_tracker(tmp_path, [], highlights=rules)
+    setup = post("a", "WTS whole setup", body="CPU-ryzen 7 5800x Motherboard- ASUS Tuf x570 GPU-Zotac 3060ti")
+    assert tracker.tags_for(setup) == ["PC"]
+    lappy = post("b", "Selling ROG", body="Gaming laptop, RTX 3060, motherboard replaced")
+    assert tracker.tags_for(lappy) == []
+    # body terms don't look at the title, title terms don't look at the body
+    assert tracker.tags_for(post("c", "motherboard for sale")) == []
+    assert tracker.tags_for(post("d", "Selling stuff", body="not a gaming pc")) == []

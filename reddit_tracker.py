@@ -29,6 +29,7 @@ log = logging.getLogger("reddit_tracker")
 
 WHATSAPP_MAX_CHARS = 4000  # WhatsApp caps a message at 4096 characters
 MAX_SEEN_IDS = 5000
+BODY_MATCH_CHARS = 2000  # how much of a post's body "body:" rule terms look at
 ATOM_NS = {"a": "http://www.w3.org/2005/Atom"}
 
 
@@ -405,9 +406,12 @@ class Matcher:
     """Case-insensitive search for any of several terms as whole words.
 
     "rig" won't match "original" and "sale" won't match "resale", but digits
-    may touch a term, so "rtx" still matches "RTX4060". Spaces in a term
-    also match hyphens or nothing ("gaming pc" ~ "gaming-pc", "gamingpc").
-    Terms that start or end with punctuation ("?", "₹") match anywhere.
+    may touch a letter edge, so "rtx" still matches "RTX4060". Likewise a
+    number won't match inside a bigger number ("3060" not in "13060"), but
+    letters may touch it ("3060" matches "RTX3060" and "3060ti"). Spaces in
+    a term also match hyphens or nothing ("gaming pc" ~ "gaming-pc",
+    "gamingpc"). Terms that start or end with punctuation ("?", "₹") match
+    anywhere.
     """
 
     def __init__(self, terms: Iterable[str]):
@@ -416,8 +420,12 @@ class Matcher:
             if not term:
                 continue
             body = re.escape(term).replace(r"\ ", r"[\s_-]*")
-            before = r"(?<![a-z])" if term[0].isalpha() else ""
-            after = r"(?![a-z])" if term[-1].isalpha() else ""
+            before = (
+                r"(?<![a-z])" if term[0].isalpha() else r"(?<!\d)" if term[0].isdigit() else ""
+            )
+            after = (
+                r"(?![a-z])" if term[-1].isalpha() else r"(?!\d)" if term[-1].isdigit() else ""
+            )
             parts.append(before + body + after)
         self.pattern = re.compile("|".join(parts), re.I) if parts else None
 
@@ -543,13 +551,18 @@ class Tracker:
         self.subreddits = subreddits
         self.store = store
         self.keywords = Matcher(keywords or [])
-        self.highlights = {
-            label: (
-                Matcher(t for t in terms if not t.startswith("-")),
-                Matcher(t[1:] for t in terms if t.startswith("-")),
+        # Per label: (include, exclude) matchers for the title and for the body.
+        # A term written "body:xyz" is looked for in the post body instead.
+        self.highlights = {}
+        for label, terms in (highlights or {}).items():
+            inc = [t for t in terms if not t.startswith("-")]
+            exc = [t[1:] for t in terms if t.startswith("-")]
+            self.highlights[label] = (
+                Matcher(t for t in inc if not t.startswith("body:")),
+                Matcher(t[5:] for t in inc if t.startswith("body:")),
+                Matcher(t for t in exc if not t.startswith("body:")),
+                Matcher(t[5:] for t in exc if t.startswith("body:")),
             )
-            for label, terms in (highlights or {}).items()
-        }
         # Each entry is a label, or labels joined with "+" that must all match
         # ("WTS+Gaming PC" = a gaming PC that's for sale).
         self.only_highlights = self._label_sets("ONLY_HIGHLIGHTS", only_highlights)
@@ -581,10 +594,12 @@ class Tracker:
         # The subreddit is matched too, so a rule can say "any post in
         # r/IndiaUsedTech counts" by listing r/IndiaUsedTech as a term.
         text = f"{post.title}\n{post.flair or ''}\nr/{post.subreddit}"
+        body = post.body[:BODY_MATCH_CHARS]
         return [
             label
-            for label, (include, exclude) in self.highlights.items()
-            if include.search(text) and not exclude.search(text)
+            for label, (inc, inc_body, exc, exc_body) in self.highlights.items()
+            if (inc.search(text) or inc_body.search(body))
+            and not (exc.search(text) or exc_body.search(body))
         ]
 
     def poll_once(self) -> list[Post]:

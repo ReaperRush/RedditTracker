@@ -197,7 +197,8 @@ group is checked against the post title and flair:
   tagged WTS.
 
 Rules also see the subreddit, so a term like `r/IndiaUsedTech` matches every
-post there.
+post there. A term written `body:xyz` looks in the post's text instead of the
+title.
 
 The default rules in `.env.example`:
 
@@ -208,16 +209,21 @@ The default rules in `.env.example`:
   mostly discussion, so it isn't listed there and needs real sale words.
 - **Gaming PC:** a desktop or gaming PC, excluding laptops (`laptop`, `hx`,
   `loq`, `zephyrus`, …) and "pc parts" / "pc components".
-- **GPU:** an NVIDIA, AMD or Intel graphics card (`rtx`, `gtx`, `radeon`,
-  `rx`, `arc a`, …), excluding laptops and shoes ("GTX" Gore-Tex).
+- **GPU:** an NVIDIA, AMD or Intel graphics card by name or model
+  (`rtx`, `gtx`, `radeon`, `3060`, `rx 6600`, `arc a`, …), excluding
+  laptops, iMacs and shoes ("GTX" Gore-Tex).
+- **PC parts in post** + **GPU in post:** the post's text lists desktop parts
+  (motherboard, an X570/B550/Z790… chipset, cabinet, PSU) *and* a graphics
+  card. Together they catch full-PC listings with vague titles like "WTS
+  whole setup". Neither alone is enough, so lone parts don't get sent.
 - **Possible seller:** an owner asking what their PC is worth ("What is my
   PC worth?", "how much can I sell…"). These aren't listings, but they're
   people you could message. They're sent silently, so only real listings
   make a sound.
 
-On 695 recent posts from the subreddits, these rules sent 32 notifications
-with sound (20 gaming PCs for sale, 11 graphics cards for sale and one
-unclear "RTX 4080/RX 9070" post), plus 3 silent "what's my PC worth" posts. Everything else (laptops, phones, consoles, CPU or
+On ~750 recent posts from the subreddits, these rules sent 36 notifications
+with sound (gaming PCs and graphics cards for sale, plus one unclear
+"RTX 4080/RX 9070" post) and 3 silent "what's my PC worth" posts. Everything else (laptops, phones, consoles, CPU or
 RAM-only sales, questions and buy requests) was dropped.
 
 To update a server installed earlier to the latest rules, keeping your token
