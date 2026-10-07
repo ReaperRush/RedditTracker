@@ -633,9 +633,10 @@ class Tracker:
         now = self.clock()
         if self.searches and now - self._last_search_at >= self.search_interval:
             query = self.searches[self._next_search % len(self.searches)]
+            posts = self.client.search(query)  # if this fails, the same search is retried
             self._next_search += 1
             self._last_search_at = now
-            return f"search:{query}", self.client.search(query)
+            return f"search:{query}", posts
         return SUBREDDITS_SOURCE, self.client.fetch_new(self.subreddits)
 
     def poll_once(self) -> list[Post]:

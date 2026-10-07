@@ -558,3 +558,24 @@ def test_search_uses_reddit_search_feed():
     url, params = session.calls[1][1], session.calls[1][2]["params"]
     assert url == "https://www.reddit.com/search.rss"
     assert params == {"q": "Gaming PC India", "sort": "relevance", "t": "day", "limit": 50, "type": "link"}
+
+
+def test_failed_search_is_retried_not_skipped(tmp_path):
+    now = [1000.0]
+
+    class Flaky(SearchingClient):
+        failures = 1
+        def search(self, query, limit=50):
+            if self.failures:
+                self.failures -= 1
+                self.calls.append(f"failed:{query}")
+                raise rt.RateLimited(5)
+            return super().search(query, limit)
+
+    client = Flaky([[]], {"gaming pc india": [[]], "gaming pc india sell": []})
+    tracker, _ = searching_tracker(tmp_path, client, now)
+    with pytest.raises(rt.RateLimited):
+        tracker.poll_once()
+    now[0] += 10
+    tracker.poll_once()
+    assert client.calls == ["failed:gaming pc india", "search:gaming pc india"]
