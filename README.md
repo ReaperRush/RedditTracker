@@ -41,9 +41,10 @@ Then check it with `python reddit_tracker.py --test-message`.
 
 ### CallMeBot
 
-1. Save **+34 684 770 005** as a contact. Check
+1. Save **+34 623 80 11 90** as a contact (their number as of October 2026;
+   it changes from time to time, so check
    [their page](https://www.callmebot.com/blog/free-api-whatsapp-messages/)
-   in case the number has changed.
+   for the current one).
 2. Send it exactly: `I allow callmebot to send me messages`
 3. It replies with your API key. Set `WHATSAPP_PROVIDER=callmebot`,
    `CALLMEBOT_PHONE=+91…` and `CALLMEBOT_APIKEY=…`.
