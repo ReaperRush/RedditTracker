@@ -167,6 +167,17 @@ different provider.
 Avoid scheduled CI jobs such as GitHub Actions cron. They run at most every
 5 minutes, often late, and Reddit blocks most of their IPs.
 
+## Searching all of Reddit
+
+Sellers don't always post in the subreddits you watch. With `SEARCHES` set,
+the tracker also runs those Reddit searches (sorted by relevance, posts from
+today, just like searching on reddit.com), one query every
+`SEARCH_INTERVAL_SECONDS` in place of a normal check. Results go through the
+same rules. Results from subreddits you don't watch must also carry the
+`SEARCH_REQUIRE` tags; the default `_India` keeps listings from Pakistan,
+Dubai, Sri Lanka, the US and so on out. The first time each search runs, its
+current results are only remembered, not sent.
+
 ## Settings
 
 | Variable | Default | Meaning |
@@ -180,6 +191,9 @@ Avoid scheduled CI jobs such as GitHub Actions cron. They run at most every
 | `WHATSAPP_PROVIDER` | `callmebot` | `callmebot`, `waha`, `telegram`, `twilio` or `console` |
 | `DIGEST_THRESHOLD` | 5 | More new posts than this at once → one combined message |
 | `NOTIFY_ON_START` | `false` | Notify about the current posts on the very first run |
+| `SEARCHES` | (none) | Comma-separated Reddit searches to run (relevance, today) |
+| `SEARCH_REQUIRE` | (none) | Tags that search results from unwatched subreddits must have |
+| `SEARCH_INTERVAL_SECONDS` | 300 | How often one search runs (in place of a subreddit check) |
 | `STATE_FILE` | `state.json` | Where already-seen post IDs are stored |
 
 ## Highlights

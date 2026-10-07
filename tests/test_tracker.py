@@ -442,3 +442,119 @@ def test_body_terms(tmp_path):
     # body terms don't look at the title, title terms don't look at the body
     assert tracker.tags_for(post("c", "motherboard for sale")) == []
     assert tracker.tags_for(post("d", "Selling stuff", body="not a gaming pc")) == []
+
+
+class SearchingClient(FakeClient):
+    def __init__(self, sub_batches, search_results):
+        super().__init__(sub_batches)
+        self.search_results = search_results  # {query: [list of batches]}
+        self.calls = []
+
+    def fetch_new(self, subreddits, limit=100):
+        self.calls.append("subs")
+        return super().fetch_new(subreddits, limit)
+
+    def search(self, query, limit=50):
+        self.calls.append(f"search:{query}")
+        return self.search_results[query].pop(0)
+
+
+SEARCH_RULES = rt.parse_highlights(
+    "WTS: selling, wts, -wtb; Gaming PC: gaming pc; _India: india, mumbai, ₹, -dubai"
+)
+
+
+def searching_tracker(tmp_path, client, now, state='{"seen": []}', **kw):
+    if state is not None:
+        (tmp_path / "s.json").write_text(state)
+    notifier = RecordingNotifier()
+    tracker = rt.Tracker(
+        client, notifier, ["MumbaiMarketplace"], rt.SeenStore(tmp_path / "s.json"),
+        highlights=SEARCH_RULES, only_highlights=["WTS+Gaming PC"],
+        searches=["gaming pc india", "gaming pc india sell"], search_require=["_India"],
+        search_interval=300, clock=lambda: now[0], **kw,
+    )
+    return tracker, notifier
+
+
+def test_searches_rotate_in_every_search_interval(tmp_path):
+    now = [1000.0]
+    client = SearchingClient(
+        [[], [], []],
+        {"gaming pc india": [[], []], "gaming pc india sell": [[]]},
+    )
+    tracker, _ = searching_tracker(tmp_path, client, now)
+    for t in (1000, 1060, 1120, 1300, 1360, 1600):
+        now[0] = t
+        tracker.poll_once()
+    assert client.calls == [
+        "search:gaming pc india", "subs", "subs",
+        "search:gaming pc india sell", "subs", "search:gaming pc india",
+    ]
+
+
+def test_first_search_is_silent_then_new_results_are_filtered(tmp_path):
+    now = [1000.0]
+    old = post("old", "Selling gaming pc, Mumbai", sub="SomeOtherSub", author="a")
+    client = SearchingClient([[]], {
+        "gaming pc india": [
+            [old],
+            [old,
+             post("in", "Selling my gaming pc ₹50k", sub="homelabindiasales", author="b"),
+             post("dxb", "Selling gaming pc in Dubai", sub="dubaiclassifieds", author="c"),
+             post("noloc", "WTS gaming pc", sub="pcpartsales", author="d"),
+             post("watched", "WTS gaming pc", sub="MumbaiMarketplace", author="e")],
+        ],
+        "gaming pc india sell": [],
+    })
+    tracker, notifier = searching_tracker(tmp_path, client, now)
+    tracker.searches = ["gaming pc india"]
+    assert tracker.poll_once() == []          # first look at this search: just remember
+    now[0] += 300
+    sent = tracker.poll_once()
+    # India-looking results from anywhere, plus anything from a watched sub
+    assert sorted(p.id for p in sent) == ["in", "watched"]
+    assert "dxb" in tracker.store and "noloc" in tracker.store
+
+
+def test_old_state_file_counts_subreddits_as_seeded(tmp_path):
+    (tmp_path / "s.json").write_text('{"seen": [], "crosspost_keys": []}')
+    store = rt.SeenStore(tmp_path / "s.json")
+    assert store.seeded == {rt.SUBREDDITS_SOURCE}
+    store.seeded.add("search:x"); store.save()
+    assert rt.SeenStore(tmp_path / "s.json").seeded == {rt.SUBREDDITS_SOURCE, "search:x"}
+
+
+def test_fresh_state_seeds_each_source_once(tmp_path):
+    now = [1000.0]
+    client = SearchingClient(
+        [[post("s1", "WTS gaming pc", sub="MumbaiMarketplace")],
+         [post("s1", "WTS gaming pc", sub="MumbaiMarketplace"), post("s2", "WTS gaming pc mumbai", sub="MumbaiMarketplace", author="z")]],
+        {"gaming pc india": [[post("q1", "Selling gaming pc india", sub="x", author="y")]]},
+    )
+    tracker, notifier = searching_tracker(tmp_path, client, now, state=None)
+    tracker.searches = ["gaming pc india"]
+    assert tracker.poll_once() == []   # search, seeded
+    now[0] += 60
+    assert tracker.poll_once() == []   # subreddits, seeded
+    now[0] += 60
+    assert [p.id for p in tracker.poll_once()] == ["s2"]
+
+
+def test_hidden_tags_stay_out_of_the_header():
+    p = post("a", "Selling gaming pc")
+    p.tags = ["WTS", "Gaming PC", "_India"]
+    assert rt.format_post(p, priority=True).startswith("🚨 WTS · Gaming PC\n")
+
+
+def test_search_uses_reddit_search_feed():
+    session = FakeSession([
+        FakeResponse(403, text="<html>blocked</html>", headers={"Content-Type": "text/html"}),
+        FakeResponse(200, text=ATOM.replace("<entry>", '<entry><id>t5_sub</id></entry><entry>', 1),
+                     headers={"Content-Type": "application/atom+xml"}),
+    ])
+    posts = rt.RedditClient("ua", session=session).search("Gaming PC India")
+    assert [p.id for p in posts] == ["abc123"]   # the subreddit entry (t5_) is skipped
+    url, params = session.calls[1][1], session.calls[1][2]["params"]
+    assert url == "https://www.reddit.com/search.rss"
+    assert params == {"q": "Gaming PC India", "sort": "relevance", "t": "day", "limit": 50, "type": "link"}

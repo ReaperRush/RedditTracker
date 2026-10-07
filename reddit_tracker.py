@@ -30,6 +30,7 @@ log = logging.getLogger("reddit_tracker")
 WHATSAPP_MAX_CHARS = 4000  # WhatsApp caps a message at 4096 characters
 MAX_SEEN_IDS = 5000
 BODY_MATCH_CHARS = 2000  # how much of a post's body "body:" rule terms look at
+SUBREDDITS_SOURCE = "subreddits"
 ATOM_NS = {"a": "http://www.w3.org/2005/Atom"}
 
 
@@ -94,11 +95,22 @@ class RedditClient:
 
     def fetch_new(self, subreddits: Iterable[str], limit: int = 100) -> list[Post]:
         multi = "+".join(subreddits)
+        return self._fetch(
+            f"r/{multi}/new", {"limit": limit}, f"https://www.reddit.com/r/{multi}/new/.rss"
+        )
+
+    def search(self, query: str, limit: int = 50) -> list[Post]:
+        """Posts from the last 24 hours matching query, across all of Reddit,
+        ranked the way Reddit's own search ranks them."""
+        params = {"q": query, "sort": "relevance", "t": "day", "limit": limit, "type": "link"}
+        return self._fetch("search", params, "https://www.reddit.com/search.rss")
+
+    def _fetch(self, path: str, params: dict, rss_url: str) -> list[Post]:
         if self.mode == "oauth":
-            return self._fetch_oauth(multi, limit)
+            return self._fetch_oauth(path, params)
         if self.mode == "json":
             try:
-                return self._fetch_json(multi, limit)
+                return self._fetch_json(path, params)
             except _Blocked:
                 log.warning(
                     "Reddit blocked the anonymous JSON API from this IP; "
@@ -106,40 +118,29 @@ class RedditClient:
                     "for faster, more reliable polling."
                 )
                 self.mode = "rss"
-        return self._fetch_rss(multi, limit)
+        return self._fetch_rss(rss_url, params)
 
     # -- transports ---------------------------------------------------------
 
-    def _fetch_oauth(self, multi: str, limit: int) -> list[Post]:
-        resp = self._get(
-            f"https://oauth.reddit.com/r/{multi}/new",
-            params={"limit": limit, "raw_json": 1},
-            headers={"Authorization": f"bearer {self._access_token()}"},
-        )
+    def _fetch_oauth(self, path: str, params: dict) -> list[Post]:
+        url = f"https://oauth.reddit.com/{path}"
+        params = {**params, "raw_json": 1}
+        resp = self._get(url, params=params, headers={"Authorization": f"bearer {self._access_token()}"})
         if resp.status_code == 401:  # token revoked or expired early
             self._token = None
-            resp = self._get(
-                f"https://oauth.reddit.com/r/{multi}/new",
-                params={"limit": limit, "raw_json": 1},
-                headers={"Authorization": f"bearer {self._access_token()}"},
-            )
+            resp = self._get(url, params=params, headers={"Authorization": f"bearer {self._access_token()}"})
         resp.raise_for_status()
         return _parse_listing(resp.json())
 
-    def _fetch_json(self, multi: str, limit: int) -> list[Post]:
-        resp = self._get(
-            f"https://www.reddit.com/r/{multi}/new.json",
-            params={"limit": limit, "raw_json": 1},
-        )
+    def _fetch_json(self, path: str, params: dict) -> list[Post]:
+        resp = self._get(f"https://www.reddit.com/{path}.json", params={**params, "raw_json": 1})
         if resp.status_code == 403 or "json" not in resp.headers.get("Content-Type", ""):
             raise _Blocked()
         resp.raise_for_status()
         return _parse_listing(resp.json())
 
-    def _fetch_rss(self, multi: str, limit: int) -> list[Post]:
-        resp = self._get(
-            f"https://www.reddit.com/r/{multi}/new/.rss", params={"limit": limit}
-        )
+    def _fetch_rss(self, url: str, params: dict) -> list[Post]:
+        resp = self._get(url, params=params)
         if resp.status_code == 403:
             raise RuntimeError(
                 "Reddit is blocking this server's IP address. Create a Reddit app "
@@ -193,6 +194,8 @@ def _header_float(resp: requests.Response, name: str, default: float) -> float:
 def _parse_listing(data: dict) -> list[Post]:
     posts = []
     for child in data.get("data", {}).get("children", []):
+        if child.get("kind", "t3") != "t3":
+            continue
         d = child.get("data", {})
         posts.append(
             Post(
@@ -214,6 +217,8 @@ def _parse_atom(text: str) -> list[Post]:
     posts = []
     for entry in root.findall("a:entry", ATOM_NS):
         raw_id = entry.findtext("a:id", "", ATOM_NS)
+        if not raw_id.startswith("t3_"):
+            continue  # not a post (e.g. a subreddit in search results)
         category = entry.find("a:category", ATOM_NS)
         link = entry.find("a:link", ATOM_NS)
         published = entry.findtext("a:published", "", ATOM_NS)
@@ -470,8 +475,9 @@ def _subs(post: Post) -> str:
 def format_post(post: Post, priority: bool = False) -> str:
     title = post.title if len(post.title) <= 300 else post.title[:297] + "..."
     meta = f"u/{post.author}" + (f" · {post.flair}" if post.flair else "")
-    if post.tags:
-        head = f"{'🚨' if priority else '🔥'} {' · '.join(post.tags)}\n{_subs(post)}"
+    shown = [t for t in post.tags if not t.startswith("_")]  # "_Label" = hidden helper tag
+    if shown:
+        head = f"{'🚨' if priority else '🔥'} {' · '.join(shown)}\n{_subs(post)}"
     else:
         head = f"🆕 {_subs(post)}"
     return f"{head}\n*{title}*\n{meta}\n{post.short_url}"
@@ -497,15 +503,20 @@ class SeenStore:
         self.path = path
         self.ids: list[str] = []
         self.keys: list[str] = []
+        # Sources (the subreddit feed, each search) whose existing posts have
+        # already been marked as seen, so their first fetch doesn't spam you.
+        self.seeded: set[str] = set()
         self.existed = path.exists()
         if self.existed:
             try:
                 data = json.loads(path.read_text())
                 self.ids = list(data["seen"])
                 self.keys = list(data.get("crosspost_keys", []))
+                # Files from before searches existed have only seen the subreddits.
+                self.seeded = set(data.get("seeded", [SUBREDDITS_SOURCE]))
             except (ValueError, KeyError, TypeError, OSError) as exc:
                 log.warning("Could not read %s (%s); starting fresh", path, exc)
-                self.ids, self.keys = [], []
+                self.ids, self.keys, self.seeded = [], [], set()
         self._ids = set(self.ids)
         self._keys = set(self.keys)
 
@@ -528,7 +539,9 @@ class SeenStore:
         self.keys = self.keys[-MAX_SEEN_IDS:]
         self._ids, self._keys = set(self.ids), set(self.keys)
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-        tmp.write_text(json.dumps({"seen": self.ids, "crosspost_keys": self.keys}))
+        tmp.write_text(
+            json.dumps({"seen": self.ids, "crosspost_keys": self.keys, "seeded": sorted(self.seeded)})
+        )
         tmp.replace(self.path)
 
 
@@ -545,6 +558,10 @@ class Tracker:
         priority_highlights: Optional[list[str]] = None,
         notify_on_start: bool = False,
         digest_threshold: int = 5,
+        searches: Optional[list[str]] = None,
+        search_require: Optional[list[str]] = None,
+        search_interval: float = 300,
+        clock: Callable[[], float] = time.time,
     ):
         self.client = client
         self.notifier = notifier
@@ -569,9 +586,19 @@ class Tracker:
         # When set, only these posts make a sound; everything else arrives silently.
         self.priority_highlights = self._label_sets("PRIORITY_HIGHLIGHTS", priority_highlights)
         self.digest_threshold = digest_threshold
-        # On the very first run, treat what's already there as seen so you
-        # don't get blasted with the last 100 posts.
-        self._seeding = not store.existed and not notify_on_start
+        # The first time a source is fetched, treat what's already there as
+        # seen so you don't get blasted with the last 100 posts.
+        self.notify_on_start = notify_on_start
+        # Reddit-wide searches, run every search_interval seconds in place of
+        # one subreddit check. Results from subreddits you don't watch must
+        # also carry the search_require tags (e.g. "_India").
+        self.searches = [q for q in (searches or []) if q.strip()]
+        self.search_require = self._label_sets("SEARCH_REQUIRE", search_require)
+        self.search_interval = search_interval
+        self.clock = clock
+        self._next_search = 0
+        self._last_search_at = float("-inf")
+        self._watched = {sub.lower() for sub in subreddits}
 
     def _label_sets(self, setting: str, entries: Optional[list[str]]) -> list[frozenset[str]]:
         sets = [frozenset(l.strip() for l in e.split("+") if l.strip()) for e in entries or []]
@@ -602,8 +629,17 @@ class Tracker:
             and not (exc.search(text) or exc_body.search(body))
         ]
 
+    def _next_source(self) -> tuple[str, list[Post]]:
+        now = self.clock()
+        if self.searches and now - self._last_search_at >= self.search_interval:
+            query = self.searches[self._next_search % len(self.searches)]
+            self._next_search += 1
+            self._last_search_at = now
+            return f"search:{query}", self.client.search(query)
+        return SUBREDDITS_SOURCE, self.client.fetch_new(self.subreddits)
+
     def poll_once(self) -> list[Post]:
-        posts = self.client.fetch_new(self.subreddits)
+        source, posts = self._next_source()
         new = sorted(
             (p for p in posts if p.id not in self.store),
             key=lambda p: p.created_utc,
@@ -618,13 +654,14 @@ class Tracker:
             for p in group:
                 self.store.add(p.id, crosspost_key(p))
 
-        if self._seeding:
+        if source not in self.store.seeded and not self.notify_on_start:
             for group in groups.values():
                 mark(group)
+            self.store.seeded.add(source)
             self.store.save()
-            self._seeding = False
-            log.info("First run: marked %d existing posts as seen", len(new))
+            log.info("First check of %s: marked %d existing posts as seen", source, len(new))
             return []
+        self.store.seeded.add(source)
 
         priority: list[list[Post]] = []
         highlighted: list[list[Post]] = []
@@ -636,6 +673,14 @@ class Tracker:
                 continue
             first.also_in = sorted({p.subreddit for p in group} - {first.subreddit})
             first.tags = self.tags_for(first)
+            if (
+                source != SUBREDDITS_SOURCE
+                and first.subreddit.lower() not in self._watched
+                and self.search_require
+                and not self._any_set_in(self.search_require, first.tags)
+            ):
+                mark(group)  # search result from elsewhere that fails SEARCH_REQUIRE
+                continue
             if self.only_highlights and not self._any_set_in(self.only_highlights, first.tags):
                 mark(group)  # ONLY_HIGHLIGHTS is set and this post has none of them
                 continue
@@ -683,6 +728,13 @@ class Tracker:
             ", ".join("+".join(sorted(x)) for x in self.only_highlights) or "everything",
             ", ".join("+".join(sorted(x)) for x in self.priority_highlights) or "all",
         )
+        if self.searches:
+            log.info(
+                "Also searching all of Reddit every %.0fs for: %s (results from other subreddits need %s)",
+                self.search_interval,
+                " | ".join(self.searches),
+                ", ".join("+".join(sorted(x)) for x in self.search_require) or "nothing extra",
+            )
         failures = 0
         while not stop.is_set():
             wait = interval
@@ -834,6 +886,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         highlights=parse_highlights(os.getenv("HIGHLIGHTS")),
         only_highlights=_split(os.getenv("ONLY_HIGHLIGHTS"), seps=","),
         priority_highlights=_split(os.getenv("PRIORITY_HIGHLIGHTS"), seps=","),
+        searches=_split(os.getenv("SEARCHES"), seps=","),
+        search_require=_split(os.getenv("SEARCH_REQUIRE"), seps=","),
+        search_interval=_env_number("SEARCH_INTERVAL_SECONDS", 300),
         notify_on_start=_env_bool("NOTIFY_ON_START"),
         digest_threshold=int(_env_number("DIGEST_THRESHOLD", 5)),
     )

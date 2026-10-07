@@ -9,9 +9,11 @@
 #
 # Non-interactive: pass TELEGRAM_BOT_TOKEN=... TELEGRAM_CHAT_ID=... to sudo.
 #
-# To also replace your notification filters (HIGHLIGHTS, ONLY_HIGHLIGHTS,
-# PRIORITY_HIGHLIGHTS) with the latest ones from .env.example, keeping your
-# token, chat ID and subreddits:  ... | sudo UPDATE_FILTERS=1 bash
+# To also take the latest notification filters and searches from
+# .env.example (HIGHLIGHTS, ONLY_HIGHLIGHTS, PRIORITY_HIGHLIGHTS, SEARCHES,
+# SEARCH_REQUIRE, SEARCH_INTERVAL_SECONDS) and add any new subreddits,
+# keeping your token, chat ID and existing subreddits:
+#   ... | sudo UPDATE_FILTERS=1 bash
 set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/ReaperRush/RedditTracker.git}"
@@ -87,9 +89,21 @@ main() {
   if [ "${UPDATE_FILTERS:-0}" = 1 ] && ! $first_install; then
     say "Updating notification filters from .env.example"
     local key
-    for key in HIGHLIGHTS ONLY_HIGHLIGHTS PRIORITY_HIGHLIGHTS; do
-      set_env "$key" "$(grep -m1 "^$key=" "$APP_DIR/.env.example" | cut -d= -f2-)"
+    for key in HIGHLIGHTS ONLY_HIGHLIGHTS PRIORITY_HIGHLIGHTS SEARCHES SEARCH_REQUIRE SEARCH_INTERVAL_SECONDS; do
+      grep -q "^$key=" "$APP_DIR/.env.example" &&
+        set_env "$key" "$(grep -m1 "^$key=" "$APP_DIR/.env.example" | cut -d= -f2-)"
     done
+    # Add any new subreddits from .env.example; never remove yours.
+    set_env SUBREDDITS "$(python3 - "$ENV_FILE" "$APP_DIR/.env.example" <<'PY'
+import re, sys
+def subs(path):
+    m = re.search(r"^SUBREDDITS=(.*)$", open(path).read(), re.M)
+    return [s.strip() for s in (m.group(1) if m else "").split(",") if s.strip()]
+mine, latest = subs(sys.argv[1]), subs(sys.argv[2])
+have = {s.lower() for s in mine}
+print(",".join(mine + [s for s in latest if s.lower() not in have]))
+PY
+)"
   fi
   # Secrets live here: readable by root and the service only.
   chown "root:$APP_USER" "$ENV_FILE"
